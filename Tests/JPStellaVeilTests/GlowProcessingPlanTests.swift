@@ -186,7 +186,7 @@ final class GlowProcessingPlanTests: XCTestCase {
         XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: backgroundChanged))
 
         var thresholdChanged = base
-        thresholdChanged.extraction.noiseThreshold = 0.02
+        thresholdChanged.extraction.brightnessFloor = 0.02
         XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: thresholdChanged))
 
         var responseChanged = base
@@ -277,6 +277,61 @@ final class GlowProcessingPlanTests: XCTestCase {
         // シェーダ側 struct と一致していること。ずれると描画が壊れる。
         XCTAssertEqual(MemoryLayout<GlowTileParams>.stride, 80)
         XCTAssertEqual(MemoryLayout<GlowTileParams>.alignment, 8)
+    }
+
+    // MARK: - 星の明るさ分布
+
+    func testHistogramBinValuesFollowLogarithmicScale() {
+        let histogram = GlowStarHistogram(
+            bins: [0, 0, 0, 0, 0],
+            minimumValue: 0.001,
+            totalSamples: 0
+        )
+
+        // ビン 0 は「ほぼ真っ暗」枠
+        XCTAssertEqual(histogram.value(forBin: 0), 0)
+
+        // ビン 1 が下限、最後のビンが 1.0
+        XCTAssertEqual(histogram.value(forBin: 1), 0.001, accuracy: 1e-12)
+        XCTAssertEqual(histogram.value(forBin: 4), 1.0, accuracy: 1e-9)
+
+        // 対数目盛りなので、中央のビンは幾何平均あたりに来る
+        XCTAssertEqual(histogram.value(forBin: 2), 0.01, accuracy: 1e-9)
+        XCTAssertEqual(histogram.value(forBin: 3), 0.1, accuracy: 1e-9)
+    }
+
+    func testHistogramFractionAboveThreshold() {
+        // ビン 1 以降は 0.001 / 0.01 / 0.1 / 1.0 に対応する
+        let histogram = GlowStarHistogram(
+            bins: [900, 50, 30, 15, 5],
+            minimumValue: 0.001,
+            totalSamples: 1000
+        )
+
+        XCTAssertEqual(histogram.fraction(atOrAbove: 0.0), 1.0, accuracy: 1e-9)
+        XCTAssertEqual(histogram.fraction(atOrAbove: 0.001), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(histogram.fraction(atOrAbove: 0.1), 0.02, accuracy: 1e-9)
+        XCTAssertEqual(histogram.fraction(atOrAbove: 1.0), 0.005, accuracy: 1e-9)
+    }
+
+    func testHistogramNormalizedHeightsIgnoreDarkBin() {
+        // ビン 0（真っ暗な空）は桁違いに多いので、正規化の基準から外す
+        let histogram = GlowStarHistogram(
+            bins: [1_000_000, 100, 10, 1],
+            minimumValue: 0.001,
+            totalSamples: 1_000_111
+        )
+
+        let heights = histogram.normalizedHeights
+        XCTAssertEqual(heights.count, 4)
+
+        // 最大のビン（ビン 1）が 1.0 になる
+        XCTAssertEqual(heights[1], 1.0, accuracy: 1e-9)
+        XCTAssertGreaterThan(heights[2], 0)
+        XCTAssertLessThan(heights[2], heights[1])
+
+        // ビン 0 は基準から外れるので 1.0 を超える
+        XCTAssertGreaterThan(heights[0], 1.0)
     }
 
     // MARK: - 処理状態

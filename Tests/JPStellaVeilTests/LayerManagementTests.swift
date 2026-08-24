@@ -102,7 +102,7 @@ final class LayerManagementTests: XCTestCase {
             layer.opacity = 5.0
             layer.glow.intensity = 999
             layer.glow.radius = -50
-            layer.extraction.noiseThreshold = 10
+            layer.extraction.brightnessFloor = 10
             layer.skyMask.featherRadius = 100_000
             layer.skyMask.horizonY = 3.0
         }
@@ -111,7 +111,7 @@ final class LayerManagementTests: XCTestCase {
         XCTAssertEqual(updated.opacity, 1.0)
         XCTAssertEqual(updated.glow.intensity, GlowParameters.intensityRange.upperBound)
         XCTAssertEqual(updated.glow.radius, GlowParameters.radiusRange.lowerBound)
-        XCTAssertEqual(updated.extraction.noiseThreshold, StarExtractionParameters.noiseThresholdRange.upperBound)
+        XCTAssertEqual(updated.extraction.brightnessFloor, StarExtractionParameters.brightnessFloorRange.upperBound)
         XCTAssertEqual(updated.skyMask.featherRadius, SkyMaskState.featherRadiusRange.upperBound)
         XCTAssertEqual(updated.skyMask.horizonY, 1.0)
     }

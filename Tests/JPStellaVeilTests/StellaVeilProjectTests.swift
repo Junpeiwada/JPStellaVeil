@@ -10,7 +10,7 @@ final class StellaVeilProjectTests: XCTestCase {
         XCTAssertEqual(layer.glow.intensity, 1.5, accuracy: 0.0001)
         XCTAssertEqual(layer.glow.radius, 20, accuracy: 0.0001)
         XCTAssertEqual(layer.extraction.backgroundRemoval, 12, accuracy: 0.0001)
-        XCTAssertEqual(layer.extraction.noiseThreshold, 0.004, accuracy: 0.0001)
+        XCTAssertEqual(layer.extraction.brightnessFloor, 0.004, accuracy: 0.0001)
         XCTAssertTrue(layer.skyMask.isAutoEnabled)
         XCTAssertEqual(layer.skyMask.featherRadius, 60, accuracy: 0.0001)
     }

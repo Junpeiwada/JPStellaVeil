@@ -40,13 +40,15 @@ struct ApplyBar: View {
         VStack(alignment: .leading, spacing: 8) {
             if let progress = appState.processingState.progress {
                 progressContent(progress)
+            } else if !appState.isAutoApplyEnabled {
+                stoppedContent
             } else {
-                applyContent
+                idleContent
             }
         }
         .padding(12)
         // 表示内容によって高さが変わると下端の位置が動いてしまうので固定する
-        .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 96, alignment: .topLeading)
     }
 
     /// 処理中の表示（進捗と中止）。
@@ -74,55 +76,43 @@ struct ApplyBar: View {
         }
     }
 
-    /// 待機中の表示。
-    ///
-    /// 通常は値を変えると自動で処理が走るのでボタンを押す必要はない。
-    /// 中止したときだけ自動処理が止まるので、そのときにボタンで再開する。
-    private var applyContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !appState.isAutoApplyEnabled {
-                Label("自動処理は停止中です", systemImage: "pause.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if appState.hasUnappliedChanges, hasLayers {
+    /// 通常の待機表示。値を変えれば自動で処理が走るのでボタンは出さない。
+    private var idleContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if appState.hasUnappliedChanges, hasLayers {
                 Label("処理を準備しています", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if hasLayers {
+                Label("最新の状態です", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Label("レイヤーがありません", systemImage: "square.stack.3d.up.slash")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            applyButton
-
-            Text(appState.isAutoApplyEnabled
-                 ? "値を変えると自動でフル解像度処理を行います"
-                 : "中止したため自動処理を止めています。再開するには押してください")
+            Text("値を変えると自動でフル解像度処理を行います")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
     }
 
-    /// 適用ボタン。自動処理が止まっているときだけ強調する。
-    @ViewBuilder
-    private var applyButton: some View {
-        if appState.isAutoApplyEnabled {
+    /// 中止した後の表示。ここでだけ手動の再開ボタンを出す。
+    private var stoppedContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("自動処理は停止中です", systemImage: "pause.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+
             Button {
                 appState.applyGlow()
             } label: {
-                Text(hasLayers ? "適用" : "原画に戻す")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(!appState.canApplyGlow)
-        } else {
-            Button {
-                appState.applyGlow()
-            } label: {
-                Text(hasLayers ? "適用" : "原画に戻す")
+                Text("処理を再開")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!appState.canApplyGlow)
         }
@@ -376,15 +366,29 @@ private struct LayerInspector: View {
                     )
 
                     ParameterSlider(
-                        title: "ノイズ閾値",
-                        value: layer.extraction.noiseThreshold,
-                        range: StarExtractionParameters.noiseThresholdRange,
+                        title: "明るさ下限",
+                        value: layer.extraction.brightnessFloor,
+                        range: StarExtractionParameters.brightnessFloorRange,
                         defaultValue: 0.004,
-                        format: { String(format: "%.4f", $0) },
+                        format: { value in
+                            value >= 0.1
+                                ? String(format: "%.2f", value)
+                                : String(format: "%.4f", value)
+                        },
                         onChange: { newValue in
-                            appState.updateLayer(id: layer.id) { $0.extraction.noiseThreshold = newValue }
-                        }
+                            appState.updateLayer(id: layer.id) { $0.extraction.brightnessFloor = newValue }
+                        },
+                        explanation: "これより暗い星を捨てます。小さい値はノイズ抑制、大きい値は明るい星だけに絞る用途です",
+                        // 0.001 付近と 0.5 付近を 1 本のスライダーで扱うため対数目盛りにする
+                        scale: .logarithmic(minimum: 0.0002)
                     )
+
+                    if let histogram = appState.starHistogram, histogram.totalSamples > 0 {
+                        StarHistogramView(
+                            histogram: histogram,
+                            threshold: layer.extraction.brightnessFloor
+                        )
+                    }
                 }
 
                 InspectorSection("空マスク") {
@@ -440,6 +444,87 @@ private struct LayerInspector: View {
     }
 }
 
+/// 星の明るさ分布と、現在の明るさ下限の位置を示すミニグラフ。
+///
+/// どこで切ればどれだけの星が残るかを見ながら調整するためのもの。
+private struct StarHistogramView: View {
+    let histogram: GlowStarHistogram
+    let threshold: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Canvas { context, size in
+                draw(context: context, size: size)
+            }
+            .frame(height: 40)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+
+            HStack {
+                Text("暗い")
+                Spacer()
+                Text(remainingText)
+                    .monospacedDigit()
+                Spacer()
+                Text("明るい")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func draw(context: GraphicsContext, size: CGSize) {
+        let heights = histogram.normalizedHeights
+        guard heights.count > 2, size.width > 0 else { return }
+
+        // ビン 0 は「ほぼ真っ暗な空」で桁違いに多いため描かない
+        let bars = Array(heights.dropFirst())
+        let barWidth = size.width / CGFloat(bars.count)
+
+        for (index, height) in bars.enumerated() {
+            let barHeight = max(1, size.height * CGFloat(height))
+            let rect = CGRect(
+                x: CGFloat(index) * barWidth,
+                y: size.height - barHeight,
+                width: max(1, barWidth - 0.5),
+                height: barHeight
+            )
+
+            // しきい値より右（明るい側）が実際にグローの対象になる
+            let isActive = histogram.value(forBin: index + 1) >= threshold
+            context.fill(
+                Path(rect),
+                with: .color(isActive ? .accentColor.opacity(0.85) : .secondary.opacity(0.35))
+            )
+        }
+
+        var marker = Path()
+        let x = markerX(width: size.width)
+        marker.move(to: CGPoint(x: x, y: 0))
+        marker.addLine(to: CGPoint(x: x, y: size.height))
+        context.stroke(marker, with: .color(.orange), lineWidth: 1.5)
+    }
+
+    /// 明るさ下限に対応する横位置。ビンと同じ対数目盛り。
+    private func markerX(width: CGFloat) -> CGFloat {
+        guard threshold > histogram.minimumValue else { return 0 }
+
+        let span = log(1.0 / histogram.minimumValue)
+        let position = log(threshold / histogram.minimumValue) / span
+        return CGFloat(min(1.0, max(0.0, position))) * width
+    }
+
+    private var remainingText: String {
+        let percent = histogram.fraction(atOrAbove: threshold) * 100
+
+        if percent >= 1 {
+            return String(format: "グロー対象 %.1f%%", percent)
+        }
+
+        return String(format: "グロー対象 %.2f%%", percent)
+    }
+}
+
 private struct InspectorSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -462,6 +547,15 @@ private struct InspectorSection<Content: View>: View {
 
 /// スライダー、数値表示、既定値へ戻すボタンを備えたパラメータ行。
 private struct ParameterSlider: View {
+    /// スライダーの目盛りの取り方。
+    enum Scale {
+        case linear
+
+        /// 対数。桁の違う範囲（0.001 と 0.5 など）を 1 本で扱うときに使う。
+        /// `minimum` はスライダー左端に対応する値。
+        case logarithmic(minimum: Double)
+    }
+
     let title: String
     let value: Double
     let range: ClosedRange<Double>
@@ -471,6 +565,8 @@ private struct ParameterSlider: View {
 
     /// 何をするパラメータかの説明。常時表示すると作業領域を圧迫するのでツールチップにする。
     var explanation: String? = nil
+
+    var scale: Scale = .linear
 
     private var isAtDefault: Bool {
         abs(value - defaultValue) < 0.0001
@@ -502,9 +598,44 @@ private struct ParameterSlider: View {
             }
 
             Slider(
-                value: Binding(get: { value }, set: onChange),
-                in: range
+                value: Binding(
+                    get: { sliderPosition(for: value) },
+                    set: { onChange(parameterValue(at: $0)) }
+                ),
+                in: sliderBounds
             )
+        }
+    }
+
+    /// スライダーが動く範囲。対数のときは 0〜1 の位置として扱う。
+    private var sliderBounds: ClosedRange<Double> {
+        switch scale {
+        case .linear:
+            return range
+        case .logarithmic:
+            return 0.0...1.0
+        }
+    }
+
+    /// パラメータ値をスライダー位置へ変換する。
+    private func sliderPosition(for value: Double) -> Double {
+        switch scale {
+        case .linear:
+            return value
+        case .logarithmic(let minimum):
+            guard value > minimum else { return 0 }
+            return log(value / minimum) / log(range.upperBound / minimum)
+        }
+    }
+
+    /// スライダー位置をパラメータ値へ変換する。
+    private func parameterValue(at position: Double) -> Double {
+        switch scale {
+        case .linear:
+            return position
+        case .logarithmic(let minimum):
+            guard position > 0 else { return 0 }
+            return minimum * pow(range.upperBound / minimum, position)
         }
     }
 }

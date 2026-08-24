@@ -90,7 +90,7 @@ final class GlowPipelineTests: XCTestCase {
         layer.glow.intensity = 2.0
         layer.opacity = 1.0
         layer.extraction.backgroundRemoval = backgroundRemoval
-        layer.extraction.noiseThreshold = 0.0
+        layer.extraction.brightnessFloor = 0.0
         return layer
     }
 
@@ -455,6 +455,48 @@ final class GlowPipelineTests: XCTestCase {
 
         XCTAssertThrowsError(
             try pipeline.process(original: input, output: output, layers: layers)
+        )
+    }
+
+    /// 星の明るさ分布を測れること。
+    func testMeasureStarHistogramFindsBrightPixels() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+
+        // 間引き（4 画素おき）に確実に拾われる位置へ、明るさの違う点を置く
+        let brightPositions: Set<Int> = [16 * width + 16, 32 * width + 32, 48 * width + 48]
+        let faintPositions: Set<Int> = [20 * width + 20, 24 * width + 24]
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            let index = y * width + x
+            if brightPositions.contains(index) { return 0.8 }
+            if faintPositions.contains(index) { return 0.02 }
+            return 0.0
+        }
+
+        var layer = makeTestLayer()
+        layer.extraction.backgroundRemoval = 0
+
+        let histogram = try pipeline.measureStarHistogram(original: input, layer: layer)
+
+        XCTAssertGreaterThan(histogram.totalSamples, 0)
+        XCTAssertEqual(histogram.bins.count, 48)
+
+        // 暗い画素が大多数を占める
+        XCTAssertGreaterThan(histogram.bins[0], 0)
+
+        // 明るい画素が上位のビンに入っている
+        let brightCount = histogram.bins.enumerated()
+            .filter { histogram.value(forBin: $0.offset) >= 0.5 }
+            .reduce(0) { $0 + Int($1.element) }
+        XCTAssertEqual(brightCount, brightPositions.count)
+
+        // しきい値を上げると、暗い点が外れて対象が減る
+        XCTAssertGreaterThan(
+            histogram.fraction(atOrAbove: 0.001),
+            histogram.fraction(atOrAbove: 0.5),
+            "しきい値を上げても対象が減っていない"
         )
     }
 

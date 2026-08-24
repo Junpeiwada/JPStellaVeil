@@ -32,7 +32,23 @@ final class AppState: ObservableObject {
     let canvasUnavailableReason: String?
 
     /// インスペクタで編集中のレイヤー。
-    @Published var selectedLayerID: UUID?
+    @Published var selectedLayerID: UUID? {
+        didSet {
+            guard selectedLayerID != oldValue else { return }
+            refreshHistogramIfNeeded()
+        }
+    }
+
+    /// 選択中レイヤーの星の明るさ分布。明るさ下限をどこに置くかの判断に使う。
+    @Published private(set) var starHistogram: GlowStarHistogram?
+
+    /// 計測済みの条件。背景除去が変わらない限り測り直さない。
+    private var histogramKey: HistogramKey?
+
+    private struct HistogramKey: Equatable {
+        let layerID: UUID
+        let backgroundRemoval: Double
+    }
 
     /// プレビュー更新が要求された回数。「適用」の要否判定に使う。
     @Published private(set) var previewUpdateGeneration: Int = 0
@@ -172,6 +188,9 @@ final class AppState: ObservableObject {
 
         // レイヤーが残っている場合は未適用状態として扱う
         requestPreviewUpdate()
+
+        histogramKey = nil
+        refreshHistogramIfNeeded()
     }
 
     /// 表示倍率を変更する。
@@ -289,6 +308,8 @@ final class AppState: ObservableObject {
         } else {
             refreshDisplay()
         }
+
+        refreshHistogramIfNeeded()
     }
 
     /// 選択中レイヤーのパラメータを更新する。
@@ -305,6 +326,29 @@ final class AppState: ObservableObject {
         renderer.layerUniforms = set.layers.map { GlowPipeline.makeLayerParams(for: $0) }
         renderer.isGlowOnly = (previewMode == .glowOnly)
         canvasDisplay.requestRedraw()
+    }
+
+    /// 星の明るさ分布を測り直す（必要なときだけ）。
+    private func refreshHistogramIfNeeded() {
+        guard let layer = selectedLayer,
+              let original = canvasRenderer?.originalTexture,
+              let controller = processingController else {
+            histogramKey = nil
+            starHistogram = nil
+            return
+        }
+
+        let key = HistogramKey(
+            layerID: layer.id,
+            backgroundRemoval: layer.extraction.backgroundRemoval
+        )
+        guard key != histogramKey else { return }
+
+        histogramKey = key
+        controller.measureHistogram(original: original, layer: layer) { [weak self] histogram in
+            guard let self, self.histogramKey == key else { return }
+            self.starHistogram = histogram
+        }
     }
 
     /// 表示だけを更新する。

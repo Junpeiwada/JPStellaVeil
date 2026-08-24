@@ -44,6 +44,64 @@ struct GlowTileParams {
     }
 }
 
+/// シェーダの HistogramParams と一致させる構造体。
+struct HistogramParams {
+    var outputOffset: SIMD2<UInt32>
+    var outputSize: SIMD2<UInt32>
+    var binCount: UInt32
+    var minimumValue: Float
+    var sampleStride: UInt32
+    var padding: UInt32
+}
+
+/// 星の明るさ分布。しきい値をどこに置くかの判断に使う。
+struct GlowStarHistogram: Equatable {
+    /// 各ビンの画素数。index 0 は `minimumValue` 以下（ほぼ真っ暗な空）。
+    let bins: [UInt32]
+
+    /// ビン 1 の下限。
+    let minimumValue: Double
+
+    /// 数えた画素の総数。
+    let totalSamples: UInt32
+
+    /// ビン index に対応する明るさの下限。
+    func value(forBin index: Int) -> Double {
+        guard index > 0, bins.count > 2 else { return 0 }
+
+        let span = log(1.0 / minimumValue)
+        let position = Double(index - 1) / Double(bins.count - 2)
+        return minimumValue * exp(position * span)
+    }
+
+    /// 指定した明るさ以上の画素が占める割合（0〜1）。
+    func fraction(atOrAbove threshold: Double) -> Double {
+        guard totalSamples > 0 else { return 0 }
+
+        // ビンの代表値は対数計算で求めるため、境界がわずかにずれる。
+        // ちょうど境界のしきい値を渡したときに取りこぼさないよう許容差を持たせる。
+        let tolerance = max(threshold, 1e-12) * 1e-9
+
+        var count: UInt32 = 0
+        for index in bins.indices where value(forBin: index) >= threshold - tolerance {
+            count &+= bins[index]
+        }
+
+        return Double(count) / Double(totalSamples)
+    }
+
+    /// 表示用に正規化した各ビンの高さ（0〜1）。
+    ///
+    /// 画素数の差が桁違いなので対数で潰す。
+    var normalizedHeights: [Double] {
+        let maximum = bins.dropFirst().max() ?? 0
+        guard maximum > 0 else { return bins.map { _ in 0 } }
+
+        let scale = log(Double(maximum) + 1)
+        return bins.map { log(Double($0) + 1) / scale }
+    }
+}
+
 /// シェーダの CompositeParams と一致させる構造体。
 struct CompositeParams {
     var imageSize: SIMD2<UInt32>
@@ -125,6 +183,7 @@ final class GlowPipeline {
         case writeTileOutput
         case writeTileOutputUnclamped
         case compositeLayers
+        case accumulateStarHistogram
     }
 
     let device: MTLDevice
@@ -353,6 +412,151 @@ final class GlowPipeline {
         return .completed
     }
 
+    /// 星成分の明るさ分布を測る。
+    ///
+    /// 明るさ下限をどこに置けばどれだけの星が残るかを UI で見せるために使う。
+    /// 畳み込みは行わず、背景減算までで止める。
+    func measureStarHistogram(
+        original: MTLTexture,
+        layer: GlowLayer,
+        binCount: Int = 48,
+        minimumValue: Float = 0.0002,
+        sampleStride: Int = 4,
+        tileSize: Int? = nil
+    ) throws -> GlowStarHistogram {
+        let spec = GlowLayerProcessingSpec(layer: layer)
+
+        // 背景推定に必要なぶんだけマージンを取る（グローの畳み込みは行わない）
+        let apron = GaussianKernel.radius(sigma: spec.backgroundSigma)
+        let grid = GlowTileGrid(
+            imageWidth: original.width,
+            imageHeight: original.height,
+            apron: apron,
+            tileSize: tileSize
+        )
+
+        guard !grid.tiles.isEmpty else {
+            return GlowStarHistogram(bins: [], minimumValue: Double(minimumValue), totalSamples: 0)
+        }
+
+        let bufferWidth = grid.maximumRegionWidth
+        let bufferHeight = grid.maximumRegionHeight
+        let star = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
+        let work = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
+
+        guard let histogramBuffer = device.makeBuffer(
+            length: MemoryLayout<UInt32>.stride * binCount,
+            options: .storageModeShared
+        ) else {
+            throw GlowPipelineError.cannotCreateBuffer
+        }
+        memset(histogramBuffer.contents(), 0, MemoryLayout<UInt32>.stride * binCount)
+
+        var backgroundWeights: MTLBuffer?
+        var backgroundRadius = 0
+        if spec.subtractsBackground {
+            let made = try makeWeightsBuffer(sigma: spec.backgroundSigma)
+            backgroundWeights = made.buffer
+            backgroundRadius = made.radius
+        }
+
+        for tile in grid.tiles {
+            guard let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GlowPipelineError.cannotCreateCommandQueue
+            }
+
+            let offset = tile.outputOffsetInSource
+            var params = GlowTileParams(
+                sourceOrigin: SIMD2(UInt32(tile.source.x), UInt32(tile.source.y)),
+                regionSize: SIMD2(UInt32(tile.source.width), UInt32(tile.source.height)),
+                imageSize: SIMD2(UInt32(original.width), UInt32(original.height)),
+                outputOrigin: SIMD2(UInt32(tile.output.x), UInt32(tile.output.y)),
+                outputOffset: SIMD2(UInt32(offset.x), UInt32(offset.y)),
+                outputSize: SIMD2(UInt32(tile.output.width), UInt32(tile.output.height)),
+                radius: Int32(backgroundRadius),
+                weight: 0,
+                gain: 0,
+                threshold: 0,
+                componentThreshold: 0,
+                blendMode: 0,
+                hasBackground: spec.subtractsBackground ? 1 : 0
+            )
+
+            if let backgroundWeights {
+                dispatch(
+                    encoder: encoder,
+                    kernel: .blurHorizontalFromImage,
+                    textures: [original, star],
+                    params: &params,
+                    weights: backgroundWeights,
+                    width: tile.source.width,
+                    height: tile.source.height
+                )
+
+                dispatch(
+                    encoder: encoder,
+                    kernel: .blurVertical,
+                    textures: [star, work],
+                    params: &params,
+                    weights: backgroundWeights,
+                    width: tile.source.width,
+                    height: tile.source.height
+                )
+            }
+
+            // 下限を引く前の星成分を得る（分布そのものを見たいので threshold は 0）
+            dispatch(
+                encoder: encoder,
+                kernel: .extractStars,
+                textures: [original, work, star],
+                params: &params,
+                weights: nil,
+                width: tile.source.width,
+                height: tile.source.height
+            )
+
+            var histogramParams = HistogramParams(
+                outputOffset: SIMD2(UInt32(offset.x), UInt32(offset.y)),
+                outputSize: SIMD2(UInt32(tile.output.width), UInt32(tile.output.height)),
+                binCount: UInt32(binCount),
+                minimumValue: minimumValue,
+                sampleStride: UInt32(max(1, sampleStride)),
+                padding: 0
+            )
+
+            if let state = states[.accumulateStarHistogram] {
+                encoder.setComputePipelineState(state)
+                encoder.setTexture(star, index: 0)
+                encoder.setBuffer(histogramBuffer, offset: 0, index: 0)
+                encoder.setBytes(&histogramParams, length: MemoryLayout<HistogramParams>.stride, index: 1)
+
+                let side = GlowPipeline.threadgroupSide
+                encoder.dispatchThreadgroups(
+                    MTLSize(
+                        width: (tile.output.width + side - 1) / side,
+                        height: (tile.output.height + side - 1) / side,
+                        depth: 1
+                    ),
+                    threadsPerThreadgroup: MTLSize(width: side, height: side, depth: 1)
+                )
+            }
+
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+        }
+
+        let pointer = histogramBuffer.contents().bindMemory(to: UInt32.self, capacity: binCount)
+        let bins = Array(UnsafeBufferPointer(start: pointer, count: binCount))
+
+        return GlowStarHistogram(
+            bins: bins,
+            minimumValue: Double(minimumValue),
+            totalSamples: bins.reduce(0, &+)
+        )
+    }
+
     /// 保持してあるレイヤー別グローを原画へ合成する。
     ///
     /// 画素ごとに独立しているのでタイル分割は要らない。
@@ -579,7 +783,7 @@ final class GlowPipeline {
 
         // 2. 星成分の抽出（背景減算 + ノイズ下限）
         params.hasBackground = spec.subtractsBackground ? 1 : 0
-        params.threshold = spec.noiseThreshold
+        params.threshold = spec.brightnessFloor
         dispatch(
             encoder: encoder,
             kernel: .extractStars,

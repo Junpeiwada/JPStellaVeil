@@ -61,6 +61,9 @@ final class GlowProcessingController {
 
     private let pipeline: GlowPipeline
     private let queue = DispatchQueue(label: "com.example.jpstellaveil.glow-processing", qos: .userInitiated)
+
+    /// 星の明るさ分布の計測用。グロー処理を待たせないよう別キューにする。
+    private let measurementQueue = DispatchQueue(label: "com.example.jpstellaveil.glow-histogram", qos: .utility)
     private let textureLoader: MetalTextureLoader
 
     private var activeFlag: CancellationFlag?
@@ -224,6 +227,29 @@ final class GlowProcessingController {
         cachedImageSize = nil
         onDisplaySetChange?(.empty)
         notify(currentJobID, .idle)
+    }
+
+    /// 星の明るさ分布を測る。
+    ///
+    /// 背景減算までで止めるので、明るさ下限を動かしても測り直す必要はない。
+    /// 背景除去の設定が変わったときだけ呼べばよい。
+    func measureHistogram(
+        original: MTLTexture,
+        layer: GlowLayer,
+        completion: @escaping (GlowStarHistogram?) -> Void
+    ) {
+        measurementQueue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+
+            let histogram = try? self.pipeline.measureStarHistogram(original: original, layer: layer)
+
+            DispatchQueue.main.async {
+                completion(histogram)
+            }
+        }
     }
 
     /// 現在の合成結果を CGImage（リニア RGB、16bit）として取り出す。

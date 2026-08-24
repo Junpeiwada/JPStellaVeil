@@ -126,7 +126,7 @@ struct GlowLayer: Codable, Equatable, Identifiable {
             blendMode: .screen,
             opacity: 0.5,
             glow: .init(intensity: 1.5, radius: 20, brightnessResponse: 0.5),
-            extraction: .init(backgroundRemoval: 12, noiseThreshold: 0.004),
+            extraction: .init(backgroundRemoval: 12, brightnessFloor: 0.004),
             skyMask: .init(isAutoEnabled: true, horizonY: nil, featherRadius: 60)
         )
     }
@@ -216,11 +216,11 @@ enum GlowPreset: String, CaseIterable, Identifiable {
     var extraction: StarExtractionParameters {
         switch self {
         case .fine:
-            return .init(backgroundRemoval: 8, noiseThreshold: 0.006)
+            return .init(backgroundRemoval: 8, brightnessFloor: 0.006)
         case .standard:
-            return .init(backgroundRemoval: 12, noiseThreshold: 0.004)
+            return .init(backgroundRemoval: 12, brightnessFloor: 0.004)
         case .wideHalo:
-            return .init(backgroundRemoval: 24, noiseThreshold: 0.003)
+            return .init(backgroundRemoval: 24, brightnessFloor: 0.003)
         }
     }
 }
@@ -270,14 +270,25 @@ struct GlowParameters: Codable, Equatable {
 
 struct StarExtractionParameters: Codable, Equatable {
     var backgroundRemoval: Double
-    var noiseThreshold: Double
+
+    /// 星として扱う明るさの下限。背景減算後の値がこれ未満の画素は捨てる。
+    ///
+    /// 小さい値（0.001〜0.01）は高 ISO ノイズの抑制に効き、
+    /// 大きい値（0.1〜1.0）は暗い星を切り捨てて明るい星だけにグローをかけるのに使う。
+    /// 指定テストデータでは 0.004 で 11.6%、0.2 で 0.13% の画素が残る。
+    var brightnessFloor: Double
 
     static let backgroundRemovalRange: ClosedRange<Double> = 0.0...100.0
-    static let noiseThresholdRange: ClosedRange<Double> = 0.0...0.1
+    static let brightnessFloorRange: ClosedRange<Double> = 0.0...1.0
+
+    init(backgroundRemoval: Double, brightnessFloor: Double) {
+        self.backgroundRemoval = backgroundRemoval
+        self.brightnessFloor = brightnessFloor
+    }
 
     mutating func clampToValidRange() {
         backgroundRemoval = backgroundRemoval.clamped(to: StarExtractionParameters.backgroundRemovalRange)
-        noiseThreshold = noiseThreshold.clamped(to: StarExtractionParameters.noiseThresholdRange)
+        brightnessFloor = brightnessFloor.clamped(to: StarExtractionParameters.brightnessFloorRange)
     }
 }
 

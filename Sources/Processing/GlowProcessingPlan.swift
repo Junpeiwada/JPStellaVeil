@@ -164,13 +164,13 @@ enum BlendMath {
 struct GlowConvolutionKey: Equatable {
     let radius: Double
     let backgroundRemoval: Double
-    let noiseThreshold: Double
+    let brightnessFloor: Double
     let brightnessResponse: Double
 
     init(layer: GlowLayer) {
         self.radius = layer.glow.radius
         self.backgroundRemoval = layer.extraction.backgroundRemoval
-        self.noiseThreshold = layer.extraction.noiseThreshold
+        self.brightnessFloor = layer.extraction.brightnessFloor
         self.brightnessResponse = layer.glow.brightnessResponse
     }
 }
@@ -183,7 +183,7 @@ struct GlowLayerProcessingSpec: Equatable {
     let backgroundSigma: Double
 
     /// 背景減算後に切り捨てるノイズ下限。
-    let noiseThreshold: Float
+    let brightnessFloor: Float
 
     /// 4 成分 PSF の各 σ。
     let componentSigmas: [Double]
@@ -221,7 +221,7 @@ struct GlowLayerProcessingSpec: Equatable {
         let sigmas = GlowPSF.components.map { baseSigma * $0.sigmaScale }
 
         self.backgroundSigma = sigmaBackground
-        self.noiseThreshold = Float(layer.extraction.noiseThreshold)
+        self.brightnessFloor = Float(layer.extraction.brightnessFloor)
         self.componentSigmas = sigmas
         self.componentWeights = GlowPSF.components.map { Float($0.weight) }
         self.componentThresholds = GlowPSF.components.map {

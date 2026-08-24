@@ -206,6 +206,59 @@ kernel void clearAccumulator(
     destination.write(float4(0.0, 0.0, 0.0, 1.0), gid);
 }
 
+/// 星の明るさヒストグラムを集計するパラメータ。
+/// Swift 側の HistogramParams と一致させること。
+struct HistogramParams {
+    // 処理領域内での集計対象の左上（マージンを除いた中央部）
+    uint2 outputOffset;
+
+    // 集計する寸法
+    uint2 outputSize;
+
+    // ビンの数
+    uint binCount;
+
+    // ビン 1 の下限。これ以下はすべてビン 0 に入る
+    float minimumValue;
+
+    // 何画素おきに数えるか
+    uint sampleStride;
+
+    uint padding;
+};
+
+/// 星成分の明るさを対数ビンで数える。
+///
+/// しきい値をどこに置けばどれだけの星が残るかを UI で見せるために使う。
+/// 全画素を数えると atomic の競合が激しいので、間引いて数える。
+kernel void accumulateStarHistogram(
+    texture2d<float, access::read> star [[texture(0)]],
+    device atomic_uint *histogram [[buffer(0)]],
+    constant HistogramParams &params [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= params.outputSize.x || gid.y >= params.outputSize.y) {
+        return;
+    }
+
+    if ((gid.x % params.sampleStride) != 0 || (gid.y % params.sampleStride) != 0) {
+        return;
+    }
+
+    float3 color = star.read(params.outputOffset + gid).rgb;
+    float value = max(max(color.r, color.g), color.b);
+
+    uint bin = 0;
+    if (value > params.minimumValue && params.binCount > 1) {
+        float span = log(1.0 / params.minimumValue);
+        float position = log(value / params.minimumValue) / span;
+        bin = 1 + uint(saturate(position) * float(params.binCount - 2));
+        bin = min(bin, params.binCount - 1);
+    }
+
+    atomic_fetch_add_explicit(&histogram[bin], 1u, memory_order_relaxed);
+}
+
 /// 星成分を取り出す。
 ///
 /// 背景（大きくぼかした画像）を引くと、天の川のかぶりや空のグラデーションが消え、
