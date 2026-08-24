@@ -219,10 +219,11 @@ final class GlowProcessingPlanTests: XCTestCase {
     }
 
     func testRecommendedTileSizeGrowsWithApronWithinBounds() {
-        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 0), 1024)
-        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 56), 1024)
-        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 400), 1792)
-        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 2000), 2048)
+        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 0), 2048)
+        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 56), 2048)
+        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 400), 2048)
+        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 640), 2560)
+        XCTAssertEqual(GlowTileGrid.recommendedTileSize(apron: 2000), 3072)
     }
 
     func testMaximumRegionSizeMatchesLargestTile() {

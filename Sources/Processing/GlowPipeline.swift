@@ -115,6 +115,12 @@ final class GlowPipeline {
     /// スレッドグループの一辺。16x16 = 256 スレッドは大半の GPU で扱いやすい。
     private static let threadgroupSide = 16
 
+    /// 1 つのコマンドバッファへ詰めるタイル数。
+    ///
+    /// タイルごとに完了を待つと CPU と GPU の同期が毎回入る。
+    /// まとめて投入すると同期回数が減って速くなるが、キャンセルの粒度は粗くなる。
+    private static let tilesPerCommandBuffer = 4
+
     init(device: MTLDevice, library: MTLLibrary? = nil) throws {
         self.device = device
 
@@ -281,37 +287,46 @@ final class GlowPipeline {
         }
 
         let total = grid.tiles.count
+        let batchSize = GlowPipeline.tilesPerCommandBuffer
 
-        for (index, tile) in grid.tiles.enumerated() {
+        var startIndex = 0
+        while startIndex < total {
             if isCancelled() {
                 return .cancelled
             }
+
+            let endIndex = min(startIndex + batchSize, total)
 
             guard let commandBuffer = commandQueue.makeCommandBuffer(),
                   let encoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw GlowPipelineError.cannotCreateCommandQueue
             }
 
-            encodeTile(
-                encoder: encoder,
-                tile: tile,
-                imageWidth: original.width,
-                imageHeight: original.height,
-                original: original,
-                output: output,
-                outputMode: outputMode,
-                resources: resources,
-                star: star,
-                work: work,
-                accumulators: accumulators,
-                composites: composites
-            )
+            // 中間バッファはタイル間で使い回す。
+            // 既定の serial ディスパッチなので、同じエンコーダへ詰めても順に実行される。
+            for index in startIndex..<endIndex {
+                encodeTile(
+                    encoder: encoder,
+                    tile: grid.tiles[index],
+                    imageWidth: original.width,
+                    imageHeight: original.height,
+                    original: original,
+                    output: output,
+                    outputMode: outputMode,
+                    resources: resources,
+                    star: star,
+                    work: work,
+                    accumulators: accumulators,
+                    composites: composites
+                )
+            }
 
             encoder.endEncoding()
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
 
-            onTileCompleted(index + 1, total)
+            onTileCompleted(endIndex, total)
+            startIndex = endIndex
         }
 
         return .completed

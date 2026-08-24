@@ -8,6 +8,7 @@ struct JPStellaVeilApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .environmentObject(appState.canvasDisplay)
                 .frame(minWidth: 1100, minHeight: 700)
                 .onAppear {
                     openInitialFileIfSpecified()

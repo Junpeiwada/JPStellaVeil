@@ -45,6 +45,7 @@ struct ContentView: View {
 
 private struct CanvasToolbar: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var display: CanvasDisplayState
     @Binding var isImporterPresented: Bool
 
     var body: some View {
@@ -75,7 +76,7 @@ private struct CanvasToolbar: View {
             Divider().frame(height: 18)
 
             Toggle(isOn: Binding(
-                get: { appState.canvasViewState.isMaskOverlayVisible },
+                get: { display.state.isMaskOverlayVisible },
                 set: { _ in appState.toggleMaskOverlay() }
             )) {
                 Label("マスク表示", systemImage: "theatermasks")
@@ -98,7 +99,7 @@ private struct CanvasToolbar: View {
 
             // 表示倍率
             Picker("表示倍率", selection: Binding(
-                get: { ZoomSelection(mode: appState.canvasViewState.zoomMode) },
+                get: { ZoomSelection(mode: display.state.zoomMode) },
                 set: { appState.setZoomMode($0.mode) }
             )) {
                 ForEach(ZoomSelection.selectable) { selection in
@@ -117,13 +118,13 @@ private struct CanvasToolbar: View {
                 Image(systemName: "sun.max")
                 Slider(
                     value: Binding(
-                        get: { appState.canvasViewState.displayExposure },
-                        set: { appState.canvasViewState.displayExposure = $0 }
+                        get: { display.state.displayExposure },
+                        set: { display.state.displayExposure = $0 }
                     ),
                     in: 0.25...16.0
                 )
                 .frame(width: 120)
-                Text("表示 x\(appState.canvasViewState.displayExposure, specifier: "%.1f")")
+                Text("表示 x\(display.state.displayExposure, specifier: "%.1f")")
                     .font(.caption)
                     .monospacedDigit()
                     .frame(width: 70, alignment: .leading)
@@ -191,6 +192,7 @@ private struct ZoomSelection: Identifiable, Hashable {
 
 private struct CanvasContainer: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var display: CanvasDisplayState
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -202,8 +204,8 @@ private struct CanvasContainer: View {
                     CanvasView(
                         renderer: renderer,
                         viewState: Binding(
-                            get: { appState.canvasViewState },
-                            set: { appState.canvasViewState = $0 }
+                            get: { display.state },
+                            set: { display.state = $0 }
                         )
                     )
                 } else {
@@ -280,7 +282,7 @@ private struct CanvasPlaceholder: View {
             Text("ここへドラッグ＆ドロップしても開けます")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("ドラッグでパン / Command+スクロールまたはピンチでズーム\n押下中は元画像比較 / Option+ドラッグでスプリット比較")
+            Text("ドラッグでパン / Command+スクロールまたはピンチでズーム\nスペースキー押下中は元画像比較 / Option+ドラッグでスプリット比較")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -367,15 +369,16 @@ private struct InfoSidebar: View {
 
 private struct StatusBar: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var display: CanvasDisplayState
 
     var body: some View {
         HStack(spacing: 16) {
-            Text(appState.canvasViewState.zoomMode.label)
+            Text(display.state.zoomMode.label)
                 .font(.caption)
                 .monospacedDigit()
 
-            if appState.canvasViewState.splitPosition > 0.001 {
-                Text("スプリット比較 \(Int(appState.canvasViewState.splitPosition * 100))%")
+            if display.state.splitPosition > 0.001 {
+                Text("スプリット比較 \(Int(display.state.splitPosition * 100))%")
                     .font(.caption)
                 Button("解除") {
                     appState.resetSplitComparison()

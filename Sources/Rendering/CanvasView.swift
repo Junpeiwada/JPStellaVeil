@@ -10,23 +10,31 @@ struct CanvasInteractionHandlers {
     var onSplitPositionChanged: (Double) -> Void = { _ in }
 }
 
-/// パン、ズーム、押下中比較、Option ドラッグによるスプリット比較を扱う MTKView。
+/// パン、ズーム、スペースキーによる元画像比較、Option ドラッグによるスプリット比較を扱う MTKView。
 final class InteractiveMTKView: MTKView {
+    /// スペースキーの keyCode。
+    private static let spaceKeyCode: UInt16 = 49
+
     var handlers = CanvasInteractionHandlers()
 
-    /// 押下中比較を有効にするかどうか（Option 併用時はスプリット操作にする）。
+    /// 元画像比較の状態（スペースキー押下中）。
     private var isComparingOriginal = false
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// 表示された時点でキー入力を受け取れるようにする。
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(self)
+    }
+
     override func mouseDown(with event: NSEvent) {
+        // スペースキーを受け取れるよう、クリックでキャンバスへフォーカスを移す
+        window?.makeFirstResponder(self)
+
         if event.modifierFlags.contains(.option) {
             updateSplitPosition(with: event)
-            return
         }
-
-        isComparingOriginal = true
-        handlers.onOriginalComparisonChanged(true)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -35,19 +43,33 @@ final class InteractiveMTKView: MTKView {
             return
         }
 
-        // 押下中比較の最中はパンしない（比較位置がずれると見比べられない）
-        if isComparingOriginal {
-            return
-        }
-
+        // ドラッグは常にパン。元画像比較はスペースキーに割り当てている
         handlers.onPan(CGSize(width: event.deltaX, height: -event.deltaY))
     }
 
-    override func mouseUp(with event: NSEvent) {
-        if isComparingOriginal {
-            isComparingOriginal = false
-            handlers.onOriginalComparisonChanged(false)
+    override func keyDown(with event: NSEvent) {
+        guard event.keyCode == InteractiveMTKView.spaceKeyCode else {
+            super.keyDown(with: event)
+            return
         }
+
+        // 押しっぱなしのキーリピートで何度も通知しない
+        guard !isComparingOriginal else { return }
+
+        isComparingOriginal = true
+        handlers.onOriginalComparisonChanged(true)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard event.keyCode == InteractiveMTKView.spaceKeyCode else {
+            super.keyUp(with: event)
+            return
+        }
+
+        guard isComparingOriginal else { return }
+
+        isComparingOriginal = false
+        handlers.onOriginalComparisonChanged(false)
     }
 
     /// トラックパッドの 2 本指スクロールと Shift+スクロールでパンする。

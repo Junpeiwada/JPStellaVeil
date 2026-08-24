@@ -13,8 +13,17 @@ final class AppState: ObservableObject {
     /// 直近のメタデータ検証結果。
     @Published var lastMetadataVerification: MetadataVerificationResult?
 
-    /// キャンバスの表示状態（倍率、パン、比較、マスク表示）。
-    @Published var canvasViewState = CanvasViewState()
+    /// キャンバスの表示状態。
+    ///
+    /// `@Published` にせず別オブジェクトに逃がしてあるのは、
+    /// パンのたびにレイヤーパネルやサイドバーまで再評価されるのを避けるため。
+    let canvasDisplay = CanvasDisplayState()
+
+    /// 表示状態への従来どおりのアクセス経路。
+    var canvasViewState: CanvasViewState {
+        get { canvasDisplay.state }
+        set { canvasDisplay.state = newValue }
+    }
 
     /// キャンバス描画の担当。Metal が使えない環境では nil。
     let canvasRenderer: CanvasRenderer?

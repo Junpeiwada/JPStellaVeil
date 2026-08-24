@@ -263,7 +263,12 @@ final class GlowPipelineTests: XCTestCase {
 
         XCTAssertEqual(totals.count, 1, "総タイル数が途中で変わっている")
         let total = totals.first ?? 0
-        XCTAssertEqual(reported, Array(1...total))
+
+        // 複数タイルを 1 コマンドバッファへまとめるので、通知はバッチ単位になる
+        XCTAssertFalse(reported.isEmpty)
+        XCTAssertEqual(reported, reported.sorted(), "進捗が逆行している")
+        XCTAssertEqual(reported.last, total, "最後に総数まで到達していない")
+        XCTAssertGreaterThan(reported.first ?? 0, 0)
     }
 
     /// グローのみ表示では原画が含まれないこと。
