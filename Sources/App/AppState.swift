@@ -69,12 +69,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 値の変更で自動的に処理を走らせるか。
-    ///
-    /// フル解像度でも標準設定なら 0.2 秒程度で終わるため、既定は自動。
-    /// ユーザーが処理を中止したときだけ自動を止め、手動の「適用」で再開する。
-    @Published private(set) var isAutoApplyEnabled: Bool = true
-
     /// 自動適用の遅延実行。スライダーのドラッグ中に何度も処理を投げないためのもの。
     private var autoApplyWorkItem: DispatchWorkItem?
 
@@ -89,6 +83,17 @@ final class AppState: ObservableObject {
 
     /// 生成済みの空マスクの情報。
     @Published private(set) var skyMask: SkyMaskResult?
+
+    /// 空マスクを適用するか。生成したマスクは保持したまま切り替えられる。
+    @Published var isSkyMaskEnabled: Bool = true {
+        didSet {
+            guard isSkyMaskEnabled != oldValue else { return }
+            applySkyMaskToRenderer()
+        }
+    }
+
+    /// 生成した空マスクのテクスチャ。有効・無効の切り替えのために保持しておく。
+    private var skyMaskTexture: MTLTexture?
 
     /// 空マスクの生成を担当する。
     private let skyMaskService = SkyMaskService()
@@ -259,6 +264,7 @@ final class AppState: ObservableObject {
 
         renderer.setOriginalTexture(texture)
         skyMask = nil
+        skyMaskTexture = nil
 
         // 新しい画像を開いたら表示状態と処理結果を初期化する
         canvasViewState = CanvasViewState()
@@ -449,7 +455,7 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleAutoApply() {
-        guard isAutoApplyEnabled, hasImage else { return }
+        guard hasImage else { return }
 
         autoApplyWorkItem?.cancel()
 
@@ -514,7 +520,9 @@ final class AppState: ObservableObject {
 
                     self.isGeneratingSkyMask = false
                     self.skyMask = result
-                    self.canvasRenderer?.maskTexture = texture
+                    self.skyMaskTexture = texture
+                    self.isSkyMaskEnabled = true
+                    self.applySkyMaskToRenderer()
                     self.canvasViewState.isMaskOverlayVisible = true
                     self.lastStatusMessage = "空マスクを生成しました（\(result.width) x \(result.height)）"
                     self.refreshDisplay()
@@ -533,9 +541,16 @@ final class AppState: ObservableObject {
     /// 生成した空マスクを捨てる。
     func clearSkyMask() {
         skyMask = nil
+        skyMaskTexture = nil
         canvasRenderer?.maskTexture = nil
         canvasViewState.isMaskOverlayVisible = false
         lastStatusMessage = "空マスクを解除しました"
+        refreshDisplay()
+    }
+
+    /// 有効・無効の状態に合わせて、描画側へマスクを渡すかどうかを決める。
+    private func applySkyMaskToRenderer() {
+        canvasRenderer?.maskTexture = isSkyMaskEnabled ? skyMaskTexture : nil
         refreshDisplay()
     }
 
@@ -553,14 +568,13 @@ final class AppState: ObservableObject {
 
     /// 手動でフル解像度のグロー処理を開始する。
     ///
-    /// 中止したあとの再開に使う。押した時点で自動適用も再び有効になる。
+    /// 中止したあと、パラメータを変えずにやり直したいときに使う。
     func applyGlow() {
         guard hasImage else {
             lastStatusMessage = "画像が読み込まれていません"
             return
         }
 
-        isAutoApplyEnabled = true
         startProcessing()
     }
 
@@ -588,17 +602,18 @@ final class AppState: ObservableObject {
 
     /// 実行中の処理を中止する。
     ///
-    /// 中止したら自動適用も止める。勝手に再開すると中止した意味がないため。
+    /// 止めるのは「いま走っている処理」だけ。
+    /// 次にパラメータを変えれば自動で処理し直す。
+    /// 中止で自動処理そのものを止めると、以降どのパラメータも効かなくなって混乱を招く。
     func cancelGlow() {
         autoApplyWorkItem?.cancel()
         autoApplyWorkItem = nil
-        isAutoApplyEnabled = false
 
         guard processingState.isRunning else { return }
 
         processingController?.cancel()
         processingState = .cancelled
-        lastStatusMessage = "処理を中止しました"
+        lastStatusMessage = "処理を中止しました（値を変えれば処理し直します）"
     }
 
     private func handleProcessingState(_ state: GlowProcessingState) {

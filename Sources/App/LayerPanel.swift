@@ -40,8 +40,8 @@ struct ApplyBar: View {
         VStack(alignment: .leading, spacing: 8) {
             if let progress = appState.processingState.progress {
                 progressContent(progress)
-            } else if !appState.isAutoApplyEnabled {
-                stoppedContent
+            } else if appState.hasUnappliedChanges, hasLayers {
+                pendingContent
             } else {
                 idleContent
             }
@@ -79,11 +79,7 @@ struct ApplyBar: View {
     /// 通常の待機表示。値を変えれば自動で処理が走るのでボタンは出さない。
     private var idleContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if appState.hasUnappliedChanges, hasLayers {
-                Label("処理を準備しています", systemImage: "clock")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if hasLayers {
+            if hasLayers {
                 Label("最新の状態です", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.green)
@@ -99,17 +95,17 @@ struct ApplyBar: View {
         }
     }
 
-    /// 中止した後の表示。ここでだけ手動の再開ボタンを出す。
-    private var stoppedContent: some View {
+    /// 未処理の変更が残っている表示。中止した直後などに出る。
+    private var pendingContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("自動処理は停止中です", systemImage: "pause.circle.fill")
+            Label("未処理の変更があります", systemImage: "clock")
                 .font(.caption)
                 .foregroundStyle(.orange)
 
             Button {
                 appState.applyGlow()
             } label: {
-                Text("処理を再開")
+                Text("いま処理する")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -477,10 +473,20 @@ private struct SkyMaskControls: View {
                         .foregroundStyle(.secondary)
                 }
             } else if let mask = appState.skyMask {
+                Toggle(isOn: Binding(
+                    get: { appState.isSkyMaskEnabled },
+                    set: { appState.isSkyMaskEnabled = $0 }
+                )) {
+                    Text("空マスクを使う")
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
                 HStack {
                     Label("生成済み", systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(appState.isSkyMaskEnabled ? .green : .secondary)
 
                     Spacer()
 

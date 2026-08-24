@@ -164,8 +164,11 @@ final class GlowExportIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(changed, 0, "処理前と同じ画像を比較している")
     }
 
-    /// 中止すると自動処理が止まり、手動の適用で再開すること。
-    func testCancelStopsAutoApplyAndManualApplyResumesIt() throws {
+    /// 中止したあとでも、値を変えれば処理が要求されること。
+    ///
+    /// 以前は中止で自動処理そのものを止めていたため、
+    /// 以降どのパラメータを動かしても何も起きず「効かない」状態になっていた。
+    func testParametersStillTriggerProcessingAfterCancel() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
             throw XCTSkip("Metal を利用できない環境")
         }
@@ -184,13 +187,39 @@ final class GlowExportIntegrationTests: XCTestCase {
             throw XCTSkip("テスト用 TIFF を開けない環境")
         }
 
-        XCTAssertTrue(appState.isAutoApplyEnabled, "既定では自動処理が有効であること")
+        appState.addLayer(preset: .standard)
+        guard let layerID = appState.selectedLayerID else {
+            XCTFail("レイヤーを追加できていない")
+            return
+        }
 
         appState.cancelGlow()
-        XCTAssertFalse(appState.isAutoApplyEnabled, "中止したら自動処理は止まること")
 
-        appState.applyGlow()
-        XCTAssertTrue(appState.isAutoApplyEnabled, "手動の適用で自動処理が再開すること")
+        let afterCancel = appState.previewUpdateGeneration
+        appState.updateLayer(id: layerID) { $0.glow.radius = 45 }
+
+        XCTAssertGreaterThan(
+            appState.previewUpdateGeneration,
+            afterCancel,
+            "中止したあとに値を変えても処理が要求されていない"
+        )
+    }
+
+    /// 空マスクは保持したまま有効・無効を切り替えられること。
+    func testSkyMaskCanBeToggledWithoutClearing() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal を利用できない環境")
+        }
+
+        let appState = AppState()
+        XCTAssertTrue(appState.isSkyMaskEnabled, "既定では有効")
+
+        appState.isSkyMaskEnabled = false
+        XCTAssertFalse(appState.isSkyMaskEnabled)
+        XCTAssertNil(appState.canvasRenderer?.maskTexture, "無効にしたらマスクを渡さない")
+
+        appState.isSkyMaskEnabled = true
+        XCTAssertTrue(appState.isSkyMaskEnabled)
     }
 
     /// 描画時に適用できる変更では再処理を要求しないこと。
