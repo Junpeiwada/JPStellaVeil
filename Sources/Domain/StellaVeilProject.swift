@@ -125,7 +125,7 @@ struct GlowLayer: Codable, Equatable, Identifiable {
             isVisible: true,
             blendMode: .screen,
             opacity: 0.5,
-            glow: .init(intensity: 1.5, radius: 20),
+            glow: .init(intensity: 1.5, radius: 20, brightnessResponse: 0.5),
             extraction: .init(backgroundRemoval: 12, noiseThreshold: 0.004),
             skyMask: .init(isAutoEnabled: true, horizonY: nil, featherRadius: 60)
         )
@@ -203,11 +203,13 @@ enum GlowPreset: String, CaseIterable, Identifiable {
     var glow: GlowParameters {
         switch self {
         case .fine:
-            return .init(intensity: 1.2, radius: 8)
+            // 細かい星を広く拾いたいので明るさ応答は控えめ
+            return .init(intensity: 1.2, radius: 8, brightnessResponse: 0.3)
         case .standard:
-            return .init(intensity: 1.5, radius: 20)
+            return .init(intensity: 1.5, radius: 20, brightnessResponse: 0.5)
         case .wideHalo:
-            return .init(intensity: 1.8, radius: 60)
+            // 明るい星だけを大きく広げる
+            return .init(intensity: 1.8, radius: 60, brightnessResponse: 0.7)
         }
     }
 
@@ -232,8 +234,24 @@ struct GlowParameters: Codable, Equatable {
     var intensity: Double
     var radius: Double
 
+    /// 明るさ応答。明るい星ほどハローを大きくする度合い。
+    ///
+    /// 畳み込みは線形なので、これが 0 だと星の明るさが変わってもハローの「形」は変わらず、
+    /// 振幅が比例するだけになる。見かけの大きさは明るさの平方根の対数でしか増えないため、
+    /// 明るい星と暗い星でハローの大きさに差が出ない。
+    /// この値を上げると、広い成分ほど高い明るさしきい値を要求するようになり、
+    /// 暗い星は芯だけ、明るい星は裾まで乗る（PSF の形が明るさで変わる）。
+    var brightnessResponse: Double
+
+    init(intensity: Double, radius: Double, brightnessResponse: Double = 0.5) {
+        self.intensity = intensity
+        self.radius = radius
+        self.brightnessResponse = brightnessResponse
+    }
+
     static let intensityRange: ClosedRange<Double> = 0.0...5.0
     static let radiusRange: ClosedRange<Double> = 1.0...200.0
+    static let brightnessResponseRange: ClosedRange<Double> = 0.0...1.0
 
     /// これを超えると星ではなく空が霞むため UI で警告する（UI.md の要件）。
     static let recommendedMaximumRadius: Double = 80.0
@@ -246,6 +264,7 @@ struct GlowParameters: Codable, Equatable {
     mutating func clampToValidRange() {
         intensity = intensity.clamped(to: GlowParameters.intensityRange)
         radius = radius.clamped(to: GlowParameters.radiusRange)
+        brightnessResponse = brightnessResponse.clamped(to: GlowParameters.brightnessResponseRange)
     }
 }
 

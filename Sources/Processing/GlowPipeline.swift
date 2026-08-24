@@ -15,8 +15,42 @@ struct GlowTileParams {
     var weight: Float
     var gain: Float
     var threshold: Float
+    var componentThreshold: Float
     var blendMode: UInt32
     var hasBackground: UInt32
+
+    /// 領域だけを指定した初期値。
+    static func zero(
+        regionWidth: Int,
+        regionHeight: Int,
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> GlowTileParams {
+        GlowTileParams(
+            sourceOrigin: SIMD2(0, 0),
+            regionSize: SIMD2(UInt32(regionWidth), UInt32(regionHeight)),
+            imageSize: SIMD2(UInt32(imageWidth), UInt32(imageHeight)),
+            outputOrigin: SIMD2(0, 0),
+            outputOffset: SIMD2(0, 0),
+            outputSize: SIMD2(UInt32(regionWidth), UInt32(regionHeight)),
+            radius: 0,
+            weight: 0,
+            gain: 0,
+            threshold: 0,
+            componentThreshold: 0,
+            blendMode: 0,
+            hasBackground: 0
+        )
+    }
+}
+
+/// 出力に何を書くか。
+enum GlowOutputMode: Equatable, Hashable {
+    /// 原画にグローを合成した結果。
+    case composited
+
+    /// グロー成分だけ（原画を含まない）。効果の確認に使う。
+    case glowOnly
 }
 
 enum GlowPipelineError: LocalizedError {
@@ -184,6 +218,7 @@ final class GlowPipeline {
     ///   - original: 入力画像（リニア RGB）。
     ///   - output: 結果の書き込み先。`original` と同じ寸法であること。
     ///   - layers: 下から順に適用する可視レイヤー。
+    ///   - outputMode: 合成結果を書くか、グロー成分だけを書くか。
     ///   - tileSize: タイルの一辺。nil ならマージンから自動決定する。
     ///     分割の有無で結果が変わらないことを検証するため、テストから指定できるようにしてある。
     ///   - isCancelled: タイル投入前に確認されるキャンセル判定。
@@ -193,6 +228,7 @@ final class GlowPipeline {
         original: MTLTexture,
         output: MTLTexture,
         layers: [GlowLayer],
+        outputMode: GlowOutputMode = .composited,
         tileSize: Int? = nil,
         isCancelled: () -> Bool = { false },
         onTileCompleted: (Int, Int) -> Void = { _, _ in }
@@ -202,7 +238,13 @@ final class GlowPipeline {
         }
 
         // 未処理の領域も原画として見えるように、まず全面をコピーしておく
-        try copy(from: original, to: output)
+        // （グローのみ表示のときは黒で埋める）
+        switch outputMode {
+        case .composited:
+            try copy(from: original, to: output)
+        case .glowOnly:
+            try clear(output)
+        }
 
         let specs = layers.map(GlowLayerProcessingSpec.init)
         guard !specs.isEmpty else {
@@ -257,6 +299,7 @@ final class GlowPipeline {
                 imageHeight: original.height,
                 original: original,
                 output: output,
+                outputMode: outputMode,
                 resources: resources,
                 star: star,
                 work: work,
@@ -282,6 +325,7 @@ final class GlowPipeline {
         imageHeight: Int,
         original: MTLTexture,
         output: MTLTexture,
+        outputMode: GlowOutputMode,
         resources: [LayerResource],
         star: MTLTexture,
         work: MTLTexture,
@@ -300,6 +344,7 @@ final class GlowPipeline {
             weight: 0,
             gain: 0,
             threshold: 0,
+            componentThreshold: 0,
             blendMode: 0,
             hasBackground: 0
         )
@@ -307,12 +352,15 @@ final class GlowPipeline {
         let regionWidth = tile.source.width
         let regionHeight = tile.source.height
 
-        // 合成先を原画で初期化する
+        // 合成先を初期化する。
+        // グローのみ表示では黒から始め、すべてのレイヤーを加算する。
         var compositeIndex = 0
         dispatch(
             encoder: encoder,
-            kernel: .initializeBase,
-            textures: [original, composites[compositeIndex]],
+            kernel: outputMode == .glowOnly ? .clearAccumulator : .initializeBase,
+            textures: outputMode == .glowOnly
+                ? [composites[compositeIndex]]
+                : [original, composites[compositeIndex]],
             params: &params,
             weights: nil,
             width: regionWidth,
@@ -375,6 +423,7 @@ final class GlowPipeline {
             for component in resource.components {
                 params.radius = Int32(component.radius)
                 params.weight = component.weight
+                params.componentThreshold = component.brightnessThreshold
 
                 dispatch(
                     encoder: encoder,
@@ -401,7 +450,10 @@ final class GlowPipeline {
 
             // 4. マスク適用後に Screen / Add で合成する（マスクは Phase 5 で接続）
             params.gain = spec.gain
-            params.blendMode = spec.blendMode == .screen ? 0 : 1
+            // グローのみ表示では合成モードによらず加算する（成分そのものを見るため）
+            params.blendMode = outputMode == .glowOnly
+                ? 1
+                : (spec.blendMode == .screen ? 0 : 1)
             dispatch(
                 encoder: encoder,
                 kernel: .compositeGlow,
@@ -467,6 +519,45 @@ final class GlowPipeline {
         encoder.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadsPerGroup)
     }
 
+    /// テクスチャ全面を黒で埋める。
+    ///
+    /// 出力テクスチャは `.renderTarget` 用途を持たないため、レンダーパスではなく
+    /// クリア用のコンピュートカーネルで埋める。
+    private func clear(_ texture: MTLTexture) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw GlowPipelineError.cannotCreateCommandQueue
+        }
+
+        var params = GlowTileParams.zero(
+            regionWidth: texture.width,
+            regionHeight: texture.height,
+            imageWidth: texture.width,
+            imageHeight: texture.height
+        )
+
+        dispatch(
+            encoder: encoder,
+            kernel: .clearAccumulator,
+            textures: [texture],
+            params: &params,
+            weights: nil,
+            width: texture.width,
+            height: texture.height
+        )
+
+        encoder.endEncoding()
+
+        if texture.storageMode == .managed,
+           let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.synchronize(resource: texture)
+            blit.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+    }
+
     /// テクスチャ全面をコピーする。
     private func copy(from source: MTLTexture, to destination: MTLTexture) throws {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
@@ -491,6 +582,9 @@ final class GlowPipeline {
         let weights: MTLBuffer
         let radius: Int
         let weight: Float
+
+        /// 畳み込み前に星成分から引く明るさしきい値。
+        let brightnessThreshold: Float
     }
 
     private struct LayerResource {
@@ -510,9 +604,14 @@ final class GlowPipeline {
             backgroundRadius = made.radius
         }
 
-        let components = try zip(spec.componentSigmas, spec.componentWeights).map { sigma, weight -> ComponentResource in
-            let made = try makeWeightsBuffer(sigma: sigma)
-            return ComponentResource(weights: made.buffer, radius: made.radius, weight: weight)
+        let components = try (0..<spec.componentSigmas.count).map { index -> ComponentResource in
+            let made = try makeWeightsBuffer(sigma: spec.componentSigmas[index])
+            return ComponentResource(
+                weights: made.buffer,
+                radius: made.radius,
+                weight: spec.componentWeights[index],
+                brightnessThreshold: spec.componentThresholds[index]
+            )
         }
 
         return LayerResource(

@@ -72,14 +72,22 @@ final class GlowProcessingController {
 
     /// 処理を開始する。実行中の処理があればキャンセルしてから置き換える。
     ///
-    /// - Parameter generation: 適用対象のパラメータ世代。完了通知でそのまま返す。
-    func start(original: MTLTexture, layers: [GlowLayer], generation: Int) {
+    /// - Parameters:
+    ///   - generation: 適用対象のパラメータ世代。完了通知でそのまま返す。
+    ///   - outputMode: 合成結果を作るか、グロー成分だけを作るか。
+    func start(
+        original: MTLTexture,
+        layers: [GlowLayer],
+        outputMode: GlowOutputMode = .composited,
+        generation: Int
+    ) {
         activeFlag?.cancel()
         currentJobID += 1
         let jobID = currentJobID
 
-        // レイヤーが無いときは処理結果を捨てて原画表示へ戻す
-        guard !layers.isEmpty else {
+        // レイヤーが無いときは処理結果を捨てて原画表示へ戻す。
+        // ただしグローのみ表示では「何も無い（黒）」を見せる必要があるので処理を走らせる。
+        guard !layers.isEmpty || outputMode == .glowOnly else {
             activeFlag = nil
             notifyProcessedTexture(nil)
             notify(jobID, .finished(generation: generation, duration: 0))
@@ -110,6 +118,7 @@ final class GlowProcessingController {
                     original: original,
                     output: output,
                     layers: layers,
+                    outputMode: outputMode,
                     isCancelled: { flag.isCancelled },
                     onTileCompleted: { completed, total in
                         // キャンセル済みのジョブの進捗で UI を上書きしない

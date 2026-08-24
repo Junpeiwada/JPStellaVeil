@@ -34,6 +34,9 @@ struct GlowTileParams {
     // ノイズ下限
     float threshold;
 
+    // PSF 成分ごとの明るさしきい値。畳み込み前に星成分から引く
+    float componentThreshold;
+
     // 0 = Screen, 1 = Add
     uint blendMode;
 
@@ -106,7 +109,11 @@ kernel void blurHorizontalFromImage(
     destination.write(float4(sum, 1.0), gid);
 }
 
-/// タイル内バッファを横方向にぼかす。
+/// 星成分を横方向にぼかす（PSF 成分の 1 パス目）。
+///
+/// 読み込み時に成分ごとの明るさしきい値を引く。
+/// 広い成分ほど高いしきい値なので、暗い星は芯だけ、明るい星は裾まで乗る。
+/// これにより PSF の形自体が星の明るさで変わる。
 kernel void blurHorizontal(
     texture2d<float, access::read> source [[texture(0)]],
     texture2d<float, access::write> destination [[texture(1)]],
@@ -119,12 +126,13 @@ kernel void blurHorizontal(
     }
 
     int2 center = int2(gid);
-    float3 sum = source.read(gid).rgb * weights[0];
+    float threshold = params.componentThreshold;
+    float3 sum = max(source.read(gid).rgb - threshold, 0.0) * weights[0];
 
     for (int k = 1; k <= params.radius; ++k) {
         float w = weights[k];
-        sum += source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb * w;
-        sum += source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb * w;
+        sum += max(source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb - threshold, 0.0) * w;
+        sum += max(source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb - threshold, 0.0) * w;
     }
 
     destination.write(float4(sum, 1.0), gid);

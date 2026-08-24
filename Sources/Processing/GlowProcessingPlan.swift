@@ -86,6 +86,12 @@ struct GlowPSFComponent: Equatable {
 
     /// 合成時の重み。
     let weight: Double
+
+    /// この成分が乗り始める明るさのしきい値係数。
+    ///
+    /// 芯は 0（どんなに暗い星にも乗る）、裾ほど大きい（明るい星にしか乗らない）。
+    /// 実際のしきい値は「明るさ応答 x この係数」。
+    let brightnessThresholdScale: Double
 }
 
 /// 天体写真のグロー形状を作る 4 成分ガウシアン PSF。
@@ -93,12 +99,18 @@ struct GlowPSFComponent: Equatable {
 /// 単一ガウシアンでは「芯が明るく裾が長い」形にならない。
 /// σ の異なる 4 つのガウシアンを重み付きで足し、中心の鋭さと裾の広がりを両立させる。
 /// 各成分はエネルギー保存（積分 1）で、重みの合計も 1 なので PSF 全体の総エネルギーは保存される。
+/// 明るさ応答を上げると、広い成分ほど高い明るさを要求するようになり、
+/// 暗い星は芯だけ、明るい星は裾まで乗る。これで PSF の形自体が明るさで変わる。
 enum GlowPSF {
     static let components: [GlowPSFComponent] = [
-        GlowPSFComponent(sigmaScale: 0.25, weight: 0.55),  // 芯
-        GlowPSFComponent(sigmaScale: 0.60, weight: 0.25),  // 内側のにじみ
-        GlowPSFComponent(sigmaScale: 1.00, weight: 0.13),  // 主ハロー
-        GlowPSFComponent(sigmaScale: 2.20, weight: 0.07)   // 長い裾
+        // 芯: すべての星に乗る
+        GlowPSFComponent(sigmaScale: 0.25, weight: 0.55, brightnessThresholdScale: 0.00),
+        // 内側のにじみ
+        GlowPSFComponent(sigmaScale: 0.60, weight: 0.25, brightnessThresholdScale: 0.05),
+        // 主ハロー
+        GlowPSFComponent(sigmaScale: 1.00, weight: 0.13, brightnessThresholdScale: 0.15),
+        // 長い裾: 明るい星にしか乗らない
+        GlowPSFComponent(sigmaScale: 2.20, weight: 0.07, brightnessThresholdScale: 0.35)
     ]
 
     /// 重みの合計。1.0 であることを前提に実装している。
@@ -157,6 +169,12 @@ struct GlowLayerProcessingSpec: Equatable {
     /// 4 成分 PSF の各重み。
     let componentWeights: [Float]
 
+    /// 4 成分 PSF の各明るさしきい値。
+    ///
+    /// 畳み込み前に星成分からこの値を引く。広い成分ほど高いので、
+    /// 明るい星ほど広い成分まで乗る（PSF の形が明るさで変わる）。
+    let componentThresholds: [Float]
+
     /// グローに掛ける総合ゲイン（強度 x 不透明度）。
     let gain: Float
 
@@ -181,6 +199,9 @@ struct GlowLayerProcessingSpec: Equatable {
         self.noiseThreshold = Float(layer.extraction.noiseThreshold)
         self.componentSigmas = sigmas
         self.componentWeights = GlowPSF.components.map { Float($0.weight) }
+        self.componentThresholds = GlowPSF.components.map {
+            Float(layer.glow.brightnessResponse * $0.brightnessThresholdScale)
+        }
         self.gain = Float(layer.glow.intensity * layer.opacity)
         self.blendMode = layer.blendMode
 

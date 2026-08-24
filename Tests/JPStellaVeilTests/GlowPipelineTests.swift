@@ -266,6 +266,99 @@ final class GlowPipelineTests: XCTestCase {
         XCTAssertEqual(reported, Array(1...total))
     }
 
+    /// グローのみ表示では原画が含まれないこと。
+    func testGlowOnlyModeExcludesOriginalImage() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+        let background: Float = 0.2
+
+        // 背景の上に明るい点を 1 つ置く
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            (x == 32 && y == 32) ? 1.0 : background
+        }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        try pipeline.process(
+            original: input,
+            output: output,
+            layers: [makeTestLayer()],
+            outputMode: .glowOnly
+        )
+
+        let result = readValues(from: output, pipeline: pipeline)
+        func value(_ x: Int, _ y: Int) -> Float { result[y * width + x] }
+
+        // 背景レベルが混ざっていない
+        XCTAssertEqual(value(2, 2), 0.0, accuracy: 1e-4, "原画の背景が残っている")
+
+        // 星の周囲にはグローが出ている
+        XCTAssertGreaterThan(value(33, 32), 0.0)
+    }
+
+    /// グローのみ表示でレイヤーが無ければ真っ黒になること。
+    func testGlowOnlyModeWithoutLayersIsBlack() throws {
+        let pipeline = try makePipeline()
+        let width = 32
+        let height = 32
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { _, _ in 0.5 }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        try pipeline.process(original: input, output: output, layers: [], outputMode: .glowOnly)
+
+        for value in readValues(from: output, pipeline: pipeline) {
+            XCTAssertEqual(value, 0.0, accuracy: 1e-4)
+        }
+    }
+
+    /// 明るさ応答を上げると、暗い星ほどグローが削られること。
+    ///
+    /// 広い成分に高いしきい値がかかるので、暗い星は芯だけになり、
+    /// 明るい星は裾まで残る。これが「明るい星ほど大きなハロー」の実体。
+    func testBrightnessResponseAffectsFaintStarsMoreThanBrightOnes() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+
+        func totalGlow(starBrightness: Float, response: Double) throws -> Double {
+            let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+                (x == 32 && y == 32) ? starBrightness : 0.0
+            }
+            let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+            var layer = makeTestLayer()
+            layer.glow.brightnessResponse = response
+
+            try pipeline.process(
+                original: input,
+                output: output,
+                layers: [layer],
+                outputMode: .glowOnly
+            )
+
+            return readValues(from: output, pipeline: pipeline).reduce(0.0) { $0 + Double($1) }
+        }
+
+        let faintLinear = try totalGlow(starBrightness: 0.12, response: 0.0)
+        let faintResponsive = try totalGlow(starBrightness: 0.12, response: 0.8)
+        let brightLinear = try totalGlow(starBrightness: 0.95, response: 0.0)
+        let brightResponsive = try totalGlow(starBrightness: 0.95, response: 0.8)
+
+        XCTAssertGreaterThan(faintLinear, 0)
+        XCTAssertGreaterThan(brightLinear, 0)
+
+        // 明るさ応答は両方を削るが、暗い星の方が削られる割合が大きい
+        let faintRetention = faintResponsive / faintLinear
+        let brightRetention = brightResponsive / brightLinear
+
+        XCTAssertLessThan(
+            faintRetention,
+            brightRetention,
+            "暗い星と明るい星で効き方が変わっていない（faint=\(faintRetention) bright=\(brightRetention)）"
+        )
+    }
+
     /// 処理結果を 16bit の CGImage として取り出せる。
     func testProcessedTextureConvertsToLinearCGImage() throws {
         let pipeline = try makePipeline()

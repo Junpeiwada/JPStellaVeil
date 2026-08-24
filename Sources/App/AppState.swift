@@ -34,6 +34,26 @@ final class AppState: ObservableObject {
     /// グロー処理の進み具合。
     @Published private(set) var processingState: GlowProcessingState = .idle
 
+    /// キャンバスに何を表示するか（合成結果／グロー成分のみ）。
+    @Published var previewMode: GlowOutputMode = .composited {
+        didSet {
+            guard previewMode != oldValue else { return }
+            requestPreviewUpdate()
+        }
+    }
+
+    /// 値の変更で自動的に処理を走らせるか。
+    ///
+    /// フル解像度でも標準設定なら 0.2 秒程度で終わるため、既定は自動。
+    /// ユーザーが処理を中止したときだけ自動を止め、手動の「適用」で再開する。
+    @Published private(set) var isAutoApplyEnabled: Bool = true
+
+    /// 自動適用の遅延実行。スライダーのドラッグ中に何度も処理を投げないためのもの。
+    private var autoApplyWorkItem: DispatchWorkItem?
+
+    /// 自動適用までの待ち時間。
+    private static let autoApplyDelay: TimeInterval = 0.15
+
     /// 画像処理の実行管理。Metal が使えない環境では nil。
     private var processingController: GlowProcessingController?
 
@@ -242,9 +262,27 @@ final class AppState: ObservableObject {
 
     /// プレビュー再計算の要求。
     ///
-    /// ここでは処理を開始しない。フル解像度処理は「適用」ボタンでのみ走る。
+    /// 自動適用が有効なら、少し待ってからフル解像度処理を開始する。
+    /// 待つのは、スライダーのドラッグ中に処理を何度も投げないため。
     private func requestPreviewUpdate() {
         previewUpdateGeneration += 1
+        scheduleAutoApply()
+    }
+
+    private func scheduleAutoApply() {
+        guard isAutoApplyEnabled, hasImage else { return }
+
+        autoApplyWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.startProcessing()
+        }
+        autoApplyWorkItem = workItem
+
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + AppState.autoApplyDelay,
+            execute: workItem
+        )
     }
 
     // MARK: - グロー処理
@@ -254,34 +292,53 @@ final class AppState: ObservableObject {
         previewUpdateGeneration != lastAppliedGeneration
     }
 
-    /// 適用できる状態か（画像とレイヤーが揃っていて処理中でない）。
+    /// 適用できる状態か（画像があり、処理中でない）。
     var canApplyGlow: Bool {
         hasImage && processingController != nil && !processingState.isRunning
+    }
+
+    /// 手動でフル解像度のグロー処理を開始する。
+    ///
+    /// 中止したあとの再開に使う。押した時点で自動適用も再び有効になる。
+    func applyGlow() {
+        guard hasImage else {
+            lastStatusMessage = "画像が読み込まれていません"
+            return
+        }
+
+        isAutoApplyEnabled = true
+        startProcessing()
     }
 
     /// フル解像度のグロー処理を開始する。
     ///
     /// 縮小プレビューは作らない。処理は必ず入力と同じ解像度で行い、
     /// プレビューと書き出しの見え方を一致させる。
-    func applyGlow() {
+    private func startProcessing() {
         guard let controller = processingController,
               let original = canvasRenderer?.originalTexture else {
-            lastStatusMessage = "画像が読み込まれていません"
             return
         }
 
-        let generation = previewUpdateGeneration
-        let layers = project.visibleLayers
+        autoApplyWorkItem?.cancel()
+        autoApplyWorkItem = nil
 
-        lastStatusMessage = layers.isEmpty
-            ? "レイヤーが無いため原画を表示します"
-            : "処理を開始しました（\(layers.count) レイヤー）"
-
-        controller.start(original: original, layers: layers, generation: generation)
+        controller.start(
+            original: original,
+            layers: project.visibleLayers,
+            outputMode: previewMode,
+            generation: previewUpdateGeneration
+        )
     }
 
     /// 実行中の処理を中止する。
+    ///
+    /// 中止したら自動適用も止める。勝手に再開すると中止した意味がないため。
     func cancelGlow() {
+        autoApplyWorkItem?.cancel()
+        autoApplyWorkItem = nil
+        isAutoApplyEnabled = false
+
         guard processingState.isRunning else { return }
 
         processingController?.cancel()
@@ -296,9 +353,11 @@ final class AppState: ObservableObject {
         switch state {
         case .finished(let generation, let duration):
             lastAppliedGeneration = generation
-            lastStatusMessage = duration > 0
-                ? String(format: "適用しました（%.1f 秒）", duration)
-                : "レイヤーが無いため原画を表示しています"
+            if duration > 0 {
+                lastStatusMessage = String(format: "適用しました（%.2f 秒）", duration)
+            } else if project.visibleLayers.isEmpty {
+                lastStatusMessage = "レイヤーが無いため原画を表示しています"
+            }
         case .cancelled:
             lastStatusMessage = "処理を中止しました"
         case .failed(let message):

@@ -83,6 +83,17 @@ private struct CanvasToolbar: View {
             .toggleStyle(.button)
             .disabled(!appState.hasImage)
 
+            // 追加されたグロー成分だけを見る（原画を含まない）
+            Toggle(isOn: Binding(
+                get: { appState.previewMode == .glowOnly },
+                set: { appState.previewMode = $0 ? .glowOnly : .composited }
+            )) {
+                Label("グローのみ", systemImage: "sparkles")
+            }
+            .toggleStyle(.button)
+            .disabled(!appState.hasImage)
+            .help("追加されるグロー成分だけを表示します（原画は含みません）")
+
             Divider().frame(height: 18)
 
             // 表示倍率
@@ -180,6 +191,7 @@ private struct ZoomSelection: Identifiable, Hashable {
 
 private struct CanvasContainer: View {
     @EnvironmentObject private var appState: AppState
+    @State private var isDropTargeted = false
 
     var body: some View {
         ZStack {
@@ -212,8 +224,48 @@ private struct CanvasContainer: View {
                 }
                 .padding()
             }
+
+            // ドロップ中の目印
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+                    .padding(6)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    /// ドロップされたファイルを開く。TIFF 以外は受け付けない。
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }) else {
+            return false
+        }
+
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else {
+                return
+            }
+
+            let fileExtension = url.pathExtension.lowercased()
+            guard fileExtension == "tif" || fileExtension == "tiff" else {
+                DispatchQueue.main.async {
+                    appState.lastStatusMessage = "TIFF 以外は開けません: \(url.lastPathComponent)"
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                appState.openTIFF(url: url)
+            }
+        }
+
+        return true
     }
 }
 
@@ -225,6 +277,9 @@ private struct CanvasPlaceholder: View {
                 .foregroundStyle(.secondary)
             Text("16-bit TIFF を開いてください")
                 .font(.headline)
+            Text("ここへドラッグ＆ドロップしても開けます")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text("ドラッグでパン / Command+スクロールまたはピンチでズーム\n押下中は元画像比較 / Option+ドラッグでスプリット比較")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -327,6 +382,12 @@ private struct StatusBar: View {
                 }
                 .buttonStyle(.link)
                 .font(.caption)
+            }
+
+            if appState.previewMode == .glowOnly {
+                Text("グローのみ表示")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
             }
 
             if case .running(let completed, let total) = appState.processingState {

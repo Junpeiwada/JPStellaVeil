@@ -78,15 +78,47 @@ private struct ApplyBar: View {
         }
     }
 
-    /// 待機中の表示（未適用バッジと適用ボタン）。
+    /// 待機中の表示。
+    ///
+    /// 通常は値を変えると自動で処理が走るのでボタンを押す必要はない。
+    /// 中止したときだけ自動処理が止まるので、そのときにボタンで再開する。
     private var applyContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if appState.hasUnappliedChanges, hasLayers {
-                Label("未適用の変更があります", systemImage: "exclamationmark.circle.fill")
+            if !appState.isAutoApplyEnabled {
+                Label("自動処理は停止中です", systemImage: "pause.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            } else if appState.hasUnappliedChanges, hasLayers {
+                Label("処理を準備しています", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
+            applyButton
+
+            Text(appState.isAutoApplyEnabled
+                 ? "値を変えると自動でフル解像度処理を行います"
+                 : "中止したため自動処理を止めています。再開するには押してください")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 適用ボタン。自動処理が止まっているときだけ強調する。
+    @ViewBuilder
+    private var applyButton: some View {
+        if appState.isAutoApplyEnabled {
+            Button {
+                appState.applyGlow()
+            } label: {
+                Text(hasLayers ? "適用" : "原画に戻す")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!appState.canApplyGlow)
+        } else {
             Button {
                 appState.applyGlow()
             } label: {
@@ -97,10 +129,6 @@ private struct ApplyBar: View {
             .controlSize(.large)
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!appState.canApplyGlow)
-
-            Text("フル解像度で処理します。処理中も表示操作は続けられます")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -316,6 +344,18 @@ private struct LayerInspector: View {
                         }
                     )
 
+                    ParameterSlider(
+                        title: "明るさ応答",
+                        value: layer.glow.brightnessResponse,
+                        range: GlowParameters.brightnessResponseRange,
+                        defaultValue: 0.5,
+                        format: { String(format: "%.2f", $0) },
+                        onChange: { newValue in
+                            appState.updateLayer(id: layer.id) { $0.glow.brightnessResponse = newValue }
+                        },
+                        explanation: "明るい星ほどハローを大きくします。0 では明るさに関わらず同じ形のハローになります"
+                    )
+
                     // 推奨範囲を超えたときだけ警告する（UI.md の要件）
                     if layer.glow.isRadiusBeyondRecommendation {
                         Label(
@@ -433,6 +473,9 @@ private struct ParameterSlider: View {
     let format: (Double) -> String
     let onChange: (Double) -> Void
 
+    /// 何をするパラメータかの説明。常時表示すると作業領域を圧迫するのでツールチップにする。
+    var explanation: String? = nil
+
     private var isAtDefault: Bool {
         abs(value - defaultValue) < 0.0001
     }
@@ -442,6 +485,7 @@ private struct ParameterSlider: View {
             HStack {
                 Text(title)
                     .font(.caption)
+                    .help(explanation ?? title)
 
                 Spacer()
 

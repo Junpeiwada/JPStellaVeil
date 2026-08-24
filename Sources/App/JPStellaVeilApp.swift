@@ -63,5 +63,10 @@ struct JPStellaVeilApp: App {
         if let text = environment["JPSTELLAVEIL_ZOOM"], let percent = Double(text), percent > 0 {
             appState.setZoomMode(percent == 100 ? .actualSize : .custom(percent / 100.0))
         }
+
+        // 1 で「グローのみ表示」に切り替える
+        if environment["JPSTELLAVEIL_GLOW_ONLY"] == "1" {
+            appState.previewMode = .glowOnly
+        }
     }
 }

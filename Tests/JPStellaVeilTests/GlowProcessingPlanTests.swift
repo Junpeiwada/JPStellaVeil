@@ -43,6 +43,39 @@ final class GlowProcessingPlanTests: XCTestCase {
         XCTAssertEqual(GlowPSF.totalWeight, 1.0, accuracy: 1e-9)
     }
 
+    /// 明るさしきい値は芯が 0 で、裾へ向かって上がること。
+    /// これが崩れると「明るい星ほど大きなハロー」にならない。
+    func testPSFBrightnessThresholdsIncreaseTowardTail() {
+        let thresholds = GlowPSF.components.map(\.brightnessThresholdScale)
+
+        XCTAssertEqual(thresholds.first, 0.0, "芯はどんなに暗い星にも乗るべき")
+        XCTAssertEqual(thresholds, thresholds.sorted(), "裾ほど高いしきい値であること")
+        XCTAssertGreaterThan(thresholds.last ?? 0, 0.0)
+    }
+
+    /// 明るさ応答 0 は「明るさによらず同じ形」を意味する（従来の線形挙動）。
+    func testBrightnessResponseZeroDisablesComponentThresholds() {
+        var layer = GlowLayer.makePreset(.standard)
+        layer.glow.brightnessResponse = 0
+
+        let spec = GlowLayerProcessingSpec(layer: layer)
+        XCTAssertTrue(spec.componentThresholds.allSatisfy { $0 == 0 })
+    }
+
+    func testComponentThresholdsScaleWithBrightnessResponse() {
+        var layer = GlowLayer.makePreset(.standard)
+        layer.glow.brightnessResponse = 0.5
+
+        let spec = GlowLayerProcessingSpec(layer: layer)
+        for (index, component) in GlowPSF.components.enumerated() {
+            XCTAssertEqual(
+                Double(spec.componentThresholds[index]),
+                0.5 * component.brightnessThresholdScale,
+                accuracy: 1e-6
+            )
+        }
+    }
+
     func testPSFComponentsAreOrderedFromCoreToTail() {
         let scales = GlowPSF.components.map(\.sigmaScale)
         XCTAssertEqual(scales, scales.sorted(), "芯から裾へ σ が広がる並びであること")
@@ -203,7 +236,7 @@ final class GlowProcessingPlanTests: XCTestCase {
 
     func testTileParamsLayoutIsStable() {
         // シェーダ側 struct と一致していること。ずれると描画が壊れる。
-        XCTAssertEqual(MemoryLayout<GlowTileParams>.stride, 72)
+        XCTAssertEqual(MemoryLayout<GlowTileParams>.stride, 80)
         XCTAssertEqual(MemoryLayout<GlowTileParams>.alignment, 8)
     }
 

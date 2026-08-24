@@ -153,6 +153,35 @@ final class GlowExportIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(changed, 0, "処理前と同じ画像を比較している")
     }
 
+    /// 中止すると自動処理が止まり、手動の適用で再開すること。
+    func testCancelStopsAutoApplyAndManualApplyResumesIt() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal を利用できない環境")
+        }
+
+        let service = TIFFImageIOService()
+        let inputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glow-autoapply-input.tif")
+        defer { try? FileManager.default.removeItem(at: inputURL) }
+
+        try service.writeTIFF(image: try makeStarFieldImage(width: 64, height: 64), to: inputURL)
+
+        let appState = AppState()
+        appState.openTIFF(url: inputURL)
+
+        guard appState.hasImage else {
+            throw XCTSkip("テスト用 TIFF を開けない環境")
+        }
+
+        XCTAssertTrue(appState.isAutoApplyEnabled, "既定では自動処理が有効であること")
+
+        appState.cancelGlow()
+        XCTAssertFalse(appState.isAutoApplyEnabled, "中止したら自動処理は止まること")
+
+        appState.applyGlow()
+        XCTAssertTrue(appState.isAutoApplyEnabled, "手動の適用で自動処理が再開すること")
+    }
+
     /// 未適用の変更があるうちは書き出さないこと。
     func testExportIsBlockedWhileChangesAreUnapplied() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
