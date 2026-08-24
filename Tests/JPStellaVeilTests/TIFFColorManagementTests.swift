@@ -86,7 +86,7 @@ final class TIFFColorManagementTests: XCTestCase {
     }
 
     func testProvidedTestDataRoundTripsWithMatchingProfile() throws {
-        let path = "/Users/junpeiwada/Dropbox/受け渡し用フォルダ/グロー/A1_08098-Mean Max Hor Accuracy.tif"
+        let path = "/Volumes/RAID1-8T4/Storage2025/2026/2026-08-12/A1_04276-Mean Max Hor Accuracy.tif"
         let inputURL = URL(fileURLWithPath: path)
 
         guard FileManager.default.fileExists(atPath: inputURL.path) else {

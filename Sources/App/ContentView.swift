@@ -251,7 +251,14 @@ private struct CanvasContainer: View {
         ZStack {
             Color(nsColor: .underPageBackgroundColor)
 
-            if let renderer = appState.canvasRenderer {
+            if appState.isLoadingImage {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("読み込み中…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let renderer = appState.canvasRenderer {
                 if appState.hasImage {
                     CanvasView(
                         renderer: renderer,

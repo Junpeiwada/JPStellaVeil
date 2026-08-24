@@ -81,6 +81,15 @@ final class AppState: ObservableObject {
     /// 自動適用までの待ち時間。
     private static let autoApplyDelay: TimeInterval = 0.15
 
+    /// ファイルを読み込み中か。
+    @Published private(set) var isLoadingImage: Bool = false
+
+    /// ファイル読み込み用のキュー。
+    ///
+    /// 数百 MB の TIFF ではハッシュ計算とデコードだけで数秒かかる。
+    /// メインスレッドで行うと、ドラッグ＆ドロップした瞬間に画面が固まる。
+    private let loadQueue = DispatchQueue(label: "com.example.jpstellaveil.file-loading", qos: .userInitiated)
+
     /// 画像処理の実行管理。Metal が使えない環境では nil。
     private var processingController: GlowProcessingController?
 
@@ -134,50 +143,107 @@ final class AppState: ObservableObject {
         metadataService.isExifToolAvailable
     }
 
-    func openTIFF(url: URL) {
-        do {
-            let properties = try tiffService.inspect(at: url)
-            guard properties.is16BitRGB else {
-                lastStatusMessage = "16bit RGB TIFF only"
+    /// TIFF を開く。読み込みはバックグラウンドで行う。
+    ///
+    /// - Parameter completion: 成否が決まった時点でメインスレッドから呼ばれる。
+    func openTIFF(url: URL, completion: ((Bool) -> Void)? = nil) {
+        guard !isLoadingImage else {
+            lastStatusMessage = "読み込み中です"
+            completion?(false)
+            return
+        }
+
+        isLoadingImage = true
+        lastStatusMessage = "読み込み中: \(url.lastPathComponent)"
+
+        let service = tiffService
+        let device = canvasRenderer?.device
+
+        loadQueue.async { [weak self] in
+            do {
+                let properties = try service.inspect(at: url)
+
+                guard properties.is16BitRGB else {
+                    self?.finishLoading(
+                        message: "16bit RGB TIFF only",
+                        result: nil,
+                        completion: completion
+                    )
+                    return
+                }
+
+                let ledger = try service.metadataLedger(at: url)
+                let hash = try AppState.sha256(of: url)
+
+                // テクスチャ生成もここで済ませる（8640 x 5760 の描画は数秒かかる）
+                var texture: MTLTexture?
+                if let device {
+                    let image = try service.loadImage(at: url)
+                    texture = try MetalTextureLoader(device: device).makeLinearTexture(from: image)
+                }
+
+                let record = InputImageRecord(
+                    filePath: url.path,
+                    fileHashSHA256: hash,
+                    properties: .init(
+                        width: properties.width,
+                        height: properties.height,
+                        bitsPerComponent: properties.bitsPerComponent,
+                        bitsPerPixel: properties.bitsPerPixel,
+                        colorModel: properties.colorModel,
+                        profileName: properties.profileName
+                    ),
+                    metadataLedger: .init(
+                        orientation: ledger.orientation,
+                        groupTagCounts: ledger.groupTagCounts,
+                        totalTagCount: ledger.totalTagCount
+                    )
+                )
+
+                self?.finishLoading(
+                    message: "読み込み完了: \(url.lastPathComponent)（\(properties.width) x \(properties.height)）",
+                    result: (record, texture),
+                    completion: completion
+                )
+            } catch {
+                self?.finishLoading(
+                    message: error.localizedDescription,
+                    result: nil,
+                    completion: completion
+                )
+            }
+        }
+    }
+
+    /// 読み込み結果をメインスレッドで反映する。
+    private func finishLoading(
+        message: String,
+        result: (record: InputImageRecord, texture: MTLTexture?)?,
+        completion: ((Bool) -> Void)?
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+
+            self.isLoadingImage = false
+            self.lastStatusMessage = message
+
+            guard let result else {
+                completion?(false)
                 return
             }
 
-            let ledger = try tiffService.metadataLedger(at: url)
-            let hash = try sha256(of: url)
-            project.inputImage = InputImageRecord(
-                filePath: url.path,
-                fileHashSHA256: hash,
-                properties: .init(
-                    width: properties.width,
-                    height: properties.height,
-                    bitsPerComponent: properties.bitsPerComponent,
-                    bitsPerPixel: properties.bitsPerPixel,
-                    colorModel: properties.colorModel,
-                    profileName: properties.profileName
-                ),
-                metadataLedger: .init(
-                    orientation: ledger.orientation,
-                    groupTagCounts: ledger.groupTagCounts,
-                    totalTagCount: ledger.totalTagCount
-                )
-            )
-            try loadCanvasTexture(at: url)
-
-            lastStatusMessage = "読み込み完了: \(url.lastPathComponent)（\(properties.width) x \(properties.height)）"
-        } catch {
-            lastStatusMessage = error.localizedDescription
+            self.project.inputImage = result.record
+            self.applyLoadedTexture(result.texture)
+            completion?(true)
         }
     }
 
     /// 入力画像をキャンバス表示用テクスチャへ読み込む。
-    private func loadCanvasTexture(at url: URL) throws {
-        guard let renderer = canvasRenderer else {
+    /// 読み込んだテクスチャを描画側へ渡し、表示と処理の状態を初期化する。
+    private func applyLoadedTexture(_ texture: MTLTexture?) {
+        guard let renderer = canvasRenderer, let texture else {
             return
         }
-
-        let image = try tiffService.loadImage(at: url)
-        let loader = MetalTextureLoader(device: renderer.device)
-        let texture = try loader.makeLinearTexture(from: image)
 
         renderer.setOriginalTexture(texture)
 
@@ -585,9 +651,20 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func sha256(of url: URL) throws -> String {
-        let data = try Data(contentsOf: url)
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
+    /// ファイルの SHA256。
+    ///
+    /// 数百 MB を一度にメモリへ載せないよう、分割して読みながら計算する。
+    private static func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        let chunkSize = 4 * 1024 * 1024
+
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

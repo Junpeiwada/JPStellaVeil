@@ -53,6 +53,17 @@ final class GlowExportIntegrationTests: XCTestCase {
         return image
     }
 
+    /// 読み込みが終わるまで待つ。openTIFF はバックグラウンドで動く。
+    private func openAndWait(_ appState: AppState, url: URL) {
+        let finished = expectation(description: "TIFF の読み込み")
+
+        appState.openTIFF(url: url) { _ in
+            finished.fulfill()
+        }
+
+        wait(for: [finished], timeout: 30)
+    }
+
     /// CGImage をリニア RGB の画素値として読み出す。
     private func readLinearValues(from image: CGImage) throws -> [Float] {
         let width = image.width
@@ -167,7 +178,7 @@ final class GlowExportIntegrationTests: XCTestCase {
         try service.writeTIFF(image: try makeStarFieldImage(width: 64, height: 64), to: inputURL)
 
         let appState = AppState()
-        appState.openTIFF(url: inputURL)
+        openAndWait(appState, url: inputURL)
 
         guard appState.hasImage else {
             throw XCTSkip("テスト用 TIFF を開けない環境")
@@ -199,7 +210,7 @@ final class GlowExportIntegrationTests: XCTestCase {
         try service.writeTIFF(image: try makeStarFieldImage(width: 64, height: 64), to: inputURL)
 
         let appState = AppState()
-        appState.openTIFF(url: inputURL)
+        openAndWait(appState, url: inputURL)
 
         guard appState.hasImage else {
             throw XCTSkip("テスト用 TIFF を開けない環境")
@@ -271,7 +282,7 @@ final class GlowExportIntegrationTests: XCTestCase {
         try service.writeTIFF(image: try makeStarFieldImage(width: 64, height: 64), to: inputURL)
 
         let appState = AppState()
-        appState.openTIFF(url: inputURL)
+        openAndWait(appState, url: inputURL)
 
         guard appState.project.inputImage != nil else {
             throw XCTSkip("テスト用 TIFF を開けない環境")

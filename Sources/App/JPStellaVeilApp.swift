@@ -30,25 +30,28 @@ struct JPStellaVeilApp: App {
             return
         }
 
-        appState.openTIFF(url: url)
+        // 読み込みはバックグラウンドで進むので、続きは完了後に行う
+        appState.openTIFF(url: url) { success in
+            guard success else { return }
 
-        // 動作確認用: 指定プリセットのレイヤーを起動時に追加する
-        if let presetName = ProcessInfo.processInfo.environment["JPSTELLAVEIL_ADD_PRESET"],
-           let preset = GlowPreset(rawValue: presetName) {
-            appState.addLayer(preset: preset)
+            // 動作確認用: 指定プリセットのレイヤーを追加する
+            if let presetName = ProcessInfo.processInfo.environment["JPSTELLAVEIL_ADD_PRESET"],
+               let preset = GlowPreset(rawValue: presetName) {
+                appState.addLayer(preset: preset)
+            }
+
+            // 動作確認用: そのままフル解像度処理まで走らせる（JPSTELLAVEIL_AUTO_APPLY=1）
+            if ProcessInfo.processInfo.environment["JPSTELLAVEIL_AUTO_APPLY"] == "1" {
+                appState.applyGlow()
+            }
+
+            applyDisplayOverridesIfSpecified(appState: appState)
         }
-
-        // 動作確認用: そのままフル解像度処理まで走らせる（JPSTELLAVEIL_AUTO_APPLY=1）
-        if ProcessInfo.processInfo.environment["JPSTELLAVEIL_AUTO_APPLY"] == "1" {
-            appState.applyGlow()
-        }
-
-        applyDisplayOverridesIfSpecified()
     }
 
     /// 動作確認用の表示状態指定。
     /// 星空は暗いため、効果の確認には表示露出とスプリット比較を初期状態で作れると都合がよい。
-    private func applyDisplayOverridesIfSpecified() {
+    private func applyDisplayOverridesIfSpecified(appState: AppState) {
         let environment = ProcessInfo.processInfo.environment
 
         if let text = environment["JPSTELLAVEIL_DISPLAY_EXPOSURE"], let exposure = Double(text) {

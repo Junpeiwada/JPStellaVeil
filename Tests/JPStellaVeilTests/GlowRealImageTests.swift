@@ -2,12 +2,12 @@ import Metal
 import XCTest
 @testable import JPStellaVeil
 
-/// 指定テストデータ（8640 x 4860 / 16-bit / Display P3）を使った実写検証。
+/// 指定テストデータ（8640 x 5760 / 16-bit / ProPhoto RGB）を使った実写検証。
 ///
 /// データが無い環境ではスキップする。
 final class GlowRealImageTests: XCTestCase {
 
-    private static let samplePath = "/Users/junpeiwada/Dropbox/受け渡し用フォルダ/グロー/A1_08098-Mean Max Hor Accuracy.tif"
+    private static let samplePath = "/Volumes/RAID1-8T4/Storage2025/2026/2026-08-12/A1_04276-Mean Max Hor Accuracy.tif"
 
     private func loadSampleTexture(device: MTLDevice) throws -> MTLTexture {
         guard FileManager.default.fileExists(atPath: GlowRealImageTests.samplePath) else {
@@ -56,7 +56,7 @@ final class GlowRealImageTests: XCTestCase {
         let original = try loadSampleTexture(device: pipeline.device)
 
         XCTAssertEqual(original.width, 8640)
-        XCTAssertEqual(original.height, 4860)
+        XCTAssertEqual(original.height, 5760)
 
         let output = try pipeline.makeOutputTexture(width: original.width, height: original.height)
 

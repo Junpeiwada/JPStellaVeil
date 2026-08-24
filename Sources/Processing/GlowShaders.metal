@@ -44,6 +44,24 @@ struct GlowTileParams {
     uint hasBackground;
 };
 
+/// 成分ごとの明るさしきい値を適用する。
+///
+/// しきい値を「引く」と振幅まで落ちてしまい、明るい星の裾が痩せる。
+/// そこで引き算ではなく、しきい値付近で滑らかに立ち上がるゲートを掛ける。
+/// しきい値を十分超えた星は元の明るさのまま裾が乗り、
+/// 届かない星にはその成分が乗らない。
+static inline float3 applyBrightnessGate(float3 value, float threshold) {
+    // 背景より暗い部分は星ではないので捨てる
+    float3 positive = max(value, 0.0);
+
+    if (threshold <= 0.0) {
+        return positive;
+    }
+
+    float3 gate = smoothstep(float3(threshold), float3(threshold * 1.5), positive);
+    return positive * gate;
+}
+
 /// 処理領域の外にはみ出したスレッドを弾く。
 static inline bool isOutsideRegion(uint2 gid, constant GlowTileParams &params) {
     return gid.x >= params.regionSize.x || gid.y >= params.regionSize.y;
@@ -107,21 +125,6 @@ kernel void blurHorizontalFromImage(
     }
 
     destination.write(float4(sum, 1.0), gid);
-}
-
-/// 成分ごとの明るさしきい値を適用する。
-///
-/// しきい値を「引く」と振幅まで落ちてしまい、明るい星の裾が痩せる。
-/// そこで引き算ではなく、しきい値付近で滑らかに立ち上がるゲートを掛ける。
-/// しきい値を十分超えた星は元の明るさのまま裾が乗り、
-/// 届かない星にはその成分が乗らない。
-static inline float3 applyBrightnessGate(float3 value, float threshold) {
-    if (threshold <= 0.0) {
-        return value;
-    }
-
-    float3 gate = smoothstep(float3(threshold), float3(threshold * 1.5), value);
-    return value * gate;
 }
 
 /// 星成分を横方向にぼかす（PSF 成分の 1 パス目）。
@@ -296,7 +299,9 @@ kernel void extractStars(
         color -= background.read(gid).rgb;
     }
 
-    float3 star = max(color - params.threshold, 0.0);
+    // 明るさ下限は「選別」であって「減光」ではない。
+    // 引き算にすると残った星まで下限のぶん暗くなってしまうので、ゲートを掛ける。
+    float3 star = applyBrightnessGate(color, params.threshold);
     destination.write(float4(star, 1.0), gid);
 }
 
