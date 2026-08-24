@@ -92,6 +92,15 @@ struct GlowPSFComponent: Equatable {
     /// 芯は 0（どんなに暗い星にも乗る）、裾ほど大きい（明るい星にしか乗らない）。
     /// 実際のしきい値は「明るさ応答 x この係数」。
     let brightnessThresholdScale: Double
+
+    /// 明るさ応答を上げたときの重みの増減率。
+    ///
+    /// しきい値だけでは「暗い星のグローが減る」効果しか出ず、
+    /// 肝心の「明るい星ほど大きなハロー」にならない。
+    /// 明るさ応答に応じて芯を減らし裾を増やすことで、
+    /// 明るい星のハローが広がって見えるようにする。
+    /// 実際の重みは `weight x (1 + 明るさ応答 x この係数)`。
+    let brightnessWeightBoost: Double
 }
 
 /// 明るさ下限を星単位で判定するための、ピーク検出用ぼかしの σ。
@@ -114,15 +123,43 @@ enum StarPeakDetection {
 /// 明るさ応答を上げると、広い成分ほど高い明るさを要求するようになり、
 /// 暗い星は芯だけ、明るい星は裾まで乗る。これで PSF の形自体が明るさで変わる。
 enum GlowPSF {
+    /// しきい値係数は実測の星分布に合わせてある。
+    /// 指定テストデータでは、背景減算後の明るさが 0.03 以上の画素が約 1%、
+    /// 0.10 以上が約 0.4%、0.25 以上が約 0.1%。
+    ///
+    /// 明るさ応答を 1 にしたときの重み合計は、星の明るさによってこう変わる:
+    /// 暗い星（芯のみ）0.55 / 中くらい（+内側）0.925 / 明るい（+主ハロー）1.315 /
+    /// 非常に明るい（+裾）1.735。応答 0 ではどの星も 1.0 で同じ形になる。
     static let components: [GlowPSFComponent] = [
-        // 芯: すべての星に乗る
-        GlowPSFComponent(sigmaScale: 0.25, weight: 0.55, brightnessThresholdScale: 0.00),
+        // 芯: すべての星に乗る。明るさ応答を上げると比重を下げる
+        GlowPSFComponent(
+            sigmaScale: 0.25,
+            weight: 0.55,
+            brightnessThresholdScale: 0.00,
+            // 芯は減らさない。減らすと明るい星のピークまで落ちて目立たなくなる
+            brightnessWeightBoost: 0.00
+        ),
         // 内側のにじみ
-        GlowPSFComponent(sigmaScale: 0.60, weight: 0.25, brightnessThresholdScale: 0.05),
+        GlowPSFComponent(
+            sigmaScale: 0.60,
+            weight: 0.25,
+            brightnessThresholdScale: 0.03,
+            brightnessWeightBoost: 0.50
+        ),
         // 主ハロー
-        GlowPSFComponent(sigmaScale: 1.00, weight: 0.13, brightnessThresholdScale: 0.15),
+        GlowPSFComponent(
+            sigmaScale: 1.00,
+            weight: 0.13,
+            brightnessThresholdScale: 0.10,
+            brightnessWeightBoost: 2.00
+        ),
         // 長い裾: 明るい星にしか乗らない
-        GlowPSFComponent(sigmaScale: 2.20, weight: 0.07, brightnessThresholdScale: 0.35)
+        GlowPSFComponent(
+            sigmaScale: 2.20,
+            weight: 0.07,
+            brightnessThresholdScale: 0.25,
+            brightnessWeightBoost: 5.00
+        )
     ]
 
     /// 重みの合計。1.0 であることを前提に実装している。
@@ -237,7 +274,13 @@ struct GlowLayerProcessingSpec: Equatable {
         self.backgroundSigma = sigmaBackground
         self.brightnessFloor = Float(layer.extraction.brightnessFloor)
         self.componentSigmas = sigmas
-        self.componentWeights = GlowPSF.components.map { Float($0.weight) }
+        // 明るさ応答を上げると、広い成分の重みを増やす。
+        // 明るい星は全成分が乗るのでハローが広がって強くなり、
+        // 暗い星はしきい値に届かず芯と内側だけなので変わらない。
+        // 芯の重みは動かさない（減らすと明るい星のピークまで落ちてしまう）。
+        self.componentWeights = GlowPSF.components.map {
+            Float($0.weight * (1.0 + layer.glow.brightnessResponse * $0.brightnessWeightBoost))
+        }
         self.componentThresholds = GlowPSF.components.map {
             Float(layer.glow.brightnessResponse * $0.brightnessThresholdScale)
         }
