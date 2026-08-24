@@ -364,6 +364,100 @@ final class GlowPipelineTests: XCTestCase {
         )
     }
 
+    /// 保持したグローを使い回し、ゲインだけ変えて合成し直せること。
+    ///
+    /// 強度や不透明度を変えても畳み込みをやり直さずに済むのは、この性質による。
+    func testGainIsAppliedAtCompositeTime() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            (x == 32 && y == 32) ? 1.0 : 0.0
+        }
+
+        var layer = makeTestLayer()
+        layer.blendMode = .add
+        layer.glow.intensity = 1.0
+        layer.opacity = 1.0
+
+        // 畳み込みは 1 回だけ行う
+        let glow = try pipeline.makeGlowTexture(width: width, height: height)
+        try pipeline.processLayerGlow(original: input, output: glow, layer: layer)
+
+        func composite(intensity: Double) throws -> [Float] {
+            var scaled = layer
+            scaled.glow.intensity = intensity
+
+            let output = try pipeline.makeOutputTexture(width: width, height: height)
+            try pipeline.compositeLayers(
+                original: input,
+                glows: [glow],
+                layers: [scaled],
+                output: output,
+                glowOnly: true
+            )
+            return readValues(from: output, pipeline: pipeline)
+        }
+
+        let single = try composite(intensity: 1.0)
+        let doubled = try composite(intensity: 2.0)
+
+        // 星のすぐ隣（飽和していない位置）で 2 倍になっている
+        let index = 32 * width + 35
+        XCTAssertGreaterThan(single[index], 0.0)
+        XCTAssertEqual(Double(doubled[index]), Double(single[index]) * 2.0, accuracy: 0.002)
+    }
+
+    /// 非表示のレイヤーは合成に含まれないこと。
+    func testInvisibleLayerIsExcludedFromComposite() throws {
+        let pipeline = try makePipeline()
+        let width = 32
+        let height = 32
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            (x == 16 && y == 16) ? 1.0 : 0.0
+        }
+
+        var layer = makeTestLayer()
+        layer.blendMode = .add
+
+        let glow = try pipeline.makeGlowTexture(width: width, height: height)
+        try pipeline.processLayerGlow(original: input, output: glow, layer: layer)
+
+        var hidden = layer
+        hidden.isVisible = false
+
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+        try pipeline.compositeLayers(
+            original: input,
+            glows: [glow],
+            layers: [hidden],
+            output: output,
+            glowOnly: true
+        )
+
+        for value in readValues(from: output, pipeline: pipeline) {
+            XCTAssertEqual(value, 0.0, accuracy: 1e-4, "非表示レイヤーが合成されている")
+        }
+    }
+
+    /// レイヤー数の上限を超えたら弾くこと。
+    func testTooManyLayersIsRejected() throws {
+        let pipeline = try makePipeline()
+        let width = 16
+        let height = 16
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { _, _ in 0.5 }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        let layers = (0...GlowPipeline.maximumLayerCount).map { _ in makeTestLayer() }
+
+        XCTAssertThrowsError(
+            try pipeline.process(original: input, output: output, layers: layers)
+        )
+    }
+
     /// 処理結果を 16bit の CGImage として取り出せる。
     func testProcessedTextureConvertsToLinearCGImage() throws {
         let pipeline = try makePipeline()

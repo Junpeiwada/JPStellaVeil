@@ -10,6 +10,8 @@ struct CanvasUniforms {
     var splitPosition: Float
     var showOriginal: UInt32
     var hasMask: UInt32
+    var layerCount: UInt32
+    var glowOnly: UInt32
 }
 
 enum CanvasRendererError: LocalizedError {
@@ -37,16 +39,23 @@ enum CanvasRendererError: LocalizedError {
 
 /// キャンバス描画を担う。
 ///
-/// 表示は「処理結果テクスチャ」「原画テクスチャ」「マスクテクスチャ」の 3 枚を
-/// フラグメントシェーダで合成する。処理結果が未生成のうちは原画をそのまま表示する。
+/// 原画とレイヤー別グローをフラグメントシェーダで毎回合成する。
+/// グローは畳み込み済みでゲイン適用前なので、強度・不透明度・合成モード・表示切替は
+/// 再処理なしでここに反映される。
 final class CanvasRenderer: NSObject {
     let device: MTLDevice
 
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
 
-    /// グロー処理後のテクスチャ。未処理なら nil（原画を表示）。
-    var processedTexture: MTLTexture?
+    /// レイヤー別のグロー（下から順）。ゲイン適用前。
+    var glowTextures: [MTLTexture] = []
+
+    /// 各レイヤーの合成パラメータ。`glowTextures` と同じ順序・同じ要素数にすること。
+    var layerUniforms: [CompositeLayerParams] = []
+
+    /// グロー成分だけを表示するか。
+    var isGlowOnly = false
 
     /// 入力画像そのままのテクスチャ。
     var originalTexture: MTLTexture?
@@ -107,7 +116,8 @@ final class CanvasRenderer: NSObject {
     /// 入力画像のテクスチャを差し替える。
     func setOriginalTexture(_ texture: MTLTexture?) {
         originalTexture = texture
-        processedTexture = nil
+        glowTextures = []
+        layerUniforms = []
         maskTexture = nil
     }
 
@@ -156,22 +166,44 @@ final class CanvasRenderer: NSObject {
         )
 
         encoder.setRenderPipelineState(pipelineState)
-        encoder.setFragmentTexture(processedTexture ?? original, index: 0)
-        encoder.setFragmentTexture(original, index: 1)
-        encoder.setFragmentTexture(maskTexture ?? original, index: 2)
+        encoder.setFragmentTexture(original, index: 0)
+        encoder.setFragmentTexture(maskTexture ?? original, index: 1)
+
+        // 使わないスロットにも何かを割り当てておく（未バインドのまま実行しないため）
+        let slotCount = GlowPipeline.maximumLayerCount
+        var slots = [MTLTexture?](repeating: original, count: slotCount)
+        for (index, glow) in glowTextures.prefix(slotCount).enumerated() {
+            slots[index] = glow
+        }
+        encoder.setFragmentTextures(slots, range: 2..<(2 + slotCount))
+
+        let layerCount = min(glowTextures.count, layerUniforms.count, slotCount)
 
         var uniforms = CanvasUniforms(
             exposure: Float(viewState.displayExposure),
             maskOverlayOpacity: viewState.isMaskOverlayVisible ? 0.45 : 0.0,
             splitPosition: Float(viewState.splitPosition),
             showOriginal: viewState.isShowingOriginal ? 1 : 0,
-            hasMask: maskTexture != nil ? 1 : 0
+            hasMask: maskTexture != nil ? 1 : 0,
+            layerCount: UInt32(layerCount),
+            glowOnly: isGlowOnly ? 1 : 0
         )
 
         encoder.setFragmentBytes(
             &uniforms,
             length: MemoryLayout<CanvasUniforms>.stride,
             index: 0
+        )
+
+        // 空配列は setFragmentBytes へ渡せないため、参照されないダミーを置く
+        var layers = layerCount > 0
+            ? Array(layerUniforms.prefix(layerCount))
+            : [CompositeLayerParams(gain: 0, blendMode: 0, isVisible: 0, padding: 0)]
+
+        encoder.setFragmentBytes(
+            &layers,
+            length: MemoryLayout<CompositeLayerParams>.stride * layers.count,
+            index: 1
         )
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)

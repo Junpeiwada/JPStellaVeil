@@ -44,6 +44,21 @@ struct GlowTileParams {
     }
 }
 
+/// シェーダの CompositeParams と一致させる構造体。
+struct CompositeParams {
+    var imageSize: SIMD2<UInt32>
+    var layerCount: UInt32
+    var glowOnly: UInt32
+}
+
+/// シェーダの CompositeLayerParams と一致させる構造体。
+struct CompositeLayerParams {
+    var gain: Float
+    var blendMode: UInt32
+    var isVisible: UInt32
+    var padding: UInt32
+}
+
 /// 出力に何を書くか。
 enum GlowOutputMode: Equatable, Hashable {
     /// 原画にグローを合成した結果。
@@ -61,6 +76,7 @@ enum GlowPipelineError: LocalizedError {
     case cannotCreateTexture
     case cannotCreateBuffer
     case sizeMismatch
+    case tooManyLayers(Int)
 
     var errorDescription: String? {
         switch self {
@@ -78,6 +94,8 @@ enum GlowPipelineError: LocalizedError {
             return "処理用バッファを確保できません。"
         case .sizeMismatch:
             return "入力と出力の寸法が一致しません。"
+        case .tooManyLayers(let maximum):
+            return "レイヤーが多すぎます（同時に扱えるのは \(maximum) 枚まで）。"
         }
     }
 }
@@ -105,6 +123,8 @@ final class GlowPipeline {
         case extractStars
         case compositeGlow
         case writeTileOutput
+        case writeTileOutputUnclamped
+        case compositeLayers
     }
 
     let device: MTLDevice
@@ -114,6 +134,9 @@ final class GlowPipeline {
 
     /// スレッドグループの一辺。16x16 = 256 スレッドは大半の GPU で扱いやすい。
     private static let threadgroupSide = 16
+
+    /// 同時に保持・合成できるレイヤー数。シェーダのテクスチャ配列サイズと一致させる。
+    static let maximumLayerCount = 8
 
     /// 1 つのコマンドバッファへ詰めるタイル数。
     ///
@@ -185,6 +208,25 @@ final class GlowPipeline {
         return texture
     }
 
+    /// レイヤー別グローを保持するテクスチャを作る。
+    ///
+    /// ゲインを掛ける前の値なので 1 を超えることがあり、浮動小数で持つ必要がある。
+    /// 描画と書き出しの合成でしか読まないので GPU 専用（`.private`）でよい。
+    func makeGlowTexture(width: Int, height: Int) throws -> MTLTexture {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = .rgba16Float
+        descriptor.width = width
+        descriptor.height = height
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.storageMode = .private
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw GlowPipelineError.cannotCreateTexture
+        }
+
+        return texture
+    }
+
     /// 中間バッファ。背景減算で負値、グロー加算で 1 超えが出るため浮動小数で持つ。
     private func makeIntermediateTexture(width: Int, height: Int) throws -> MTLTexture {
         let descriptor = MTLTextureDescriptor()
@@ -218,23 +260,23 @@ final class GlowPipeline {
 
     // MARK: - 処理本体
 
-    /// グロー処理を実行する。
+    /// レイヤー 1 枚分のグローを作る。
+    ///
+    /// 強度と不透明度（ゲイン）は掛けない。畳み込みの後段は線形なので、
+    /// 描画時や書き出し時に掛ければよく、そうすることでゲインを変えても再処理が要らなくなる。
     ///
     /// - Parameters:
     ///   - original: 入力画像（リニア RGB）。
-    ///   - output: 結果の書き込み先。`original` と同じ寸法であること。
-    ///   - layers: 下から順に適用する可視レイヤー。
-    ///   - outputMode: 合成結果を書くか、グロー成分だけを書くか。
+    ///   - output: グローの書き込み先（`rgba16Float`、`original` と同じ寸法）。
+    ///   - layer: 対象のレイヤー。
     ///   - tileSize: タイルの一辺。nil ならマージンから自動決定する。
-    ///     分割の有無で結果が変わらないことを検証するため、テストから指定できるようにしてある。
-    ///   - isCancelled: タイル投入前に確認されるキャンセル判定。
-    ///   - onTileCompleted: タイルが 1 枚焼き上がるたびに呼ばれる（完了数, 総数）。
+    ///   - isCancelled: バッチ投入前に確認されるキャンセル判定。
+    ///   - onTileCompleted: タイルが焼き上がるたびに呼ばれる（完了数, 総数）。
     @discardableResult
-    func process(
+    func processLayerGlow(
         original: MTLTexture,
         output: MTLTexture,
-        layers: [GlowLayer],
-        outputMode: GlowOutputMode = .composited,
+        layer: GlowLayer,
         tileSize: Int? = nil,
         isCancelled: () -> Bool = { false },
         onTileCompleted: (Int, Int) -> Void = { _, _ in }
@@ -243,26 +285,11 @@ final class GlowPipeline {
             throw GlowPipelineError.sizeMismatch
         }
 
-        // 未処理の領域も原画として見えるように、まず全面をコピーしておく
-        // （グローのみ表示のときは黒で埋める）
-        switch outputMode {
-        case .composited:
-            try copy(from: original, to: output)
-        case .glowOnly:
-            try clear(output)
-        }
-
-        let specs = layers.map(GlowLayerProcessingSpec.init)
-        guard !specs.isEmpty else {
-            onTileCompleted(1, 1)
-            return .completed
-        }
-
-        let apron = specs.map(\.apron).max() ?? 0
+        let spec = GlowLayerProcessingSpec(layer: layer)
         let grid = GlowTileGrid(
             imageWidth: original.width,
             imageHeight: original.height,
-            apron: apron,
+            apron: spec.apron,
             tileSize: tileSize
         )
 
@@ -270,19 +297,15 @@ final class GlowPipeline {
             return .completed
         }
 
-        let resources = try specs.map { try makeResources(for: $0) }
+        let resource = try makeResources(for: spec)
 
         let bufferWidth = grid.maximumRegionWidth
         let bufferHeight = grid.maximumRegionHeight
 
-        // star（星成分）と work（ぼかし作業用）
+        // star（星成分）、work（ぼかし作業用）、accumulators（4 成分 PSF の累積、ping-pong）
         let star = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
         let work = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
-        // 4 成分 PSF の累積と、レイヤー合成結果。どちらも読み書きを分けるため 2 枚 1 組
         let accumulators = try (0..<2).map { _ in
-            try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
-        }
-        let composites = try (0..<2).map { _ in
             try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
         }
 
@@ -305,19 +328,17 @@ final class GlowPipeline {
             // 中間バッファはタイル間で使い回す。
             // 既定の serial ディスパッチなので、同じエンコーダへ詰めても順に実行される。
             for index in startIndex..<endIndex {
-                encodeTile(
+                encodeLayerTile(
                     encoder: encoder,
                     tile: grid.tiles[index],
                     imageWidth: original.width,
                     imageHeight: original.height,
                     original: original,
                     output: output,
-                    outputMode: outputMode,
-                    resources: resources,
+                    resource: resource,
                     star: star,
                     work: work,
-                    accumulators: accumulators,
-                    composites: composites
+                    accumulators: accumulators
                 )
             }
 
@@ -332,20 +353,183 @@ final class GlowPipeline {
         return .completed
     }
 
-    /// タイル 1 枚分のパスをエンコードする。
-    private func encodeTile(
+    /// 保持してあるレイヤー別グローを原画へ合成する。
+    ///
+    /// 画素ごとに独立しているのでタイル分割は要らない。
+    /// 表示側のシェーダと同じ式なので、プレビューと書き出しの結果は一致する。
+    func compositeLayers(
+        original: MTLTexture,
+        glows: [MTLTexture],
+        layers: [GlowLayer],
+        output: MTLTexture,
+        glowOnly: Bool
+    ) throws {
+        guard original.width == output.width, original.height == output.height else {
+            throw GlowPipelineError.sizeMismatch
+        }
+
+        guard glows.count == layers.count else {
+            throw GlowPipelineError.sizeMismatch
+        }
+
+        guard glows.count <= GlowPipeline.maximumLayerCount else {
+            throw GlowPipelineError.tooManyLayers(GlowPipeline.maximumLayerCount)
+        }
+
+        guard let state = states[.compositeLayers],
+              let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw GlowPipelineError.cannotCreateCommandQueue
+        }
+
+        encoder.setComputePipelineState(state)
+        encoder.setTexture(original, index: 0)
+        encoder.setTexture(output, index: 1)
+
+        // 使わないスロットにも何かを割り当てておく（未バインドのまま実行しないため）
+        var textures = [MTLTexture?](repeating: original, count: GlowPipeline.maximumLayerCount)
+        for (index, glow) in glows.enumerated() {
+            textures[index] = glow
+        }
+        encoder.setTextures(textures, range: 2..<(2 + GlowPipeline.maximumLayerCount))
+
+        var params = CompositeParams(
+            imageSize: SIMD2(UInt32(output.width), UInt32(output.height)),
+            layerCount: UInt32(glows.count),
+            glowOnly: glowOnly ? 1 : 0
+        )
+        encoder.setBytes(&params, length: MemoryLayout<CompositeParams>.stride, index: 0)
+
+        var layerParams = layers.map { GlowPipeline.makeLayerParams(for: $0) }
+        if layerParams.isEmpty {
+            // 空配列は setBytes へ渡せないため、参照されないダミーを置く
+            layerParams = [CompositeLayerParams(gain: 0, blendMode: 0, isVisible: 0, padding: 0)]
+        }
+        encoder.setBytes(
+            &layerParams,
+            length: MemoryLayout<CompositeLayerParams>.stride * layerParams.count,
+            index: 1
+        )
+
+        let side = GlowPipeline.threadgroupSide
+        encoder.dispatchThreadgroups(
+            MTLSize(
+                width: (output.width + side - 1) / side,
+                height: (output.height + side - 1) / side,
+                depth: 1
+            ),
+            threadsPerThreadgroup: MTLSize(width: side, height: side, depth: 1)
+        )
+
+        encoder.endEncoding()
+
+        if output.storageMode == .managed,
+           let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.synchronize(resource: output)
+            blit.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+    }
+
+    /// レイヤーの合成パラメータを作る。表示側と書き出し側で同じ値を使う。
+    static func makeLayerParams(for layer: GlowLayer) -> CompositeLayerParams {
+        let spec = GlowLayerProcessingSpec(layer: layer)
+        return CompositeLayerParams(
+            gain: spec.gain,
+            blendMode: layer.blendMode == .screen ? 0 : 1,
+            isVisible: layer.isVisible ? 1 : 0,
+            padding: 0
+        )
+    }
+
+    /// 全レイヤーを処理して合成結果を得る。
+    ///
+    /// 書き出しとテストで使う。レイヤー別グローは内部で確保して合成後に捨てるので、
+    /// 表示のように保持したい場合は `processLayerGlow` を直接使う。
+    @discardableResult
+    func process(
+        original: MTLTexture,
+        output: MTLTexture,
+        layers: [GlowLayer],
+        outputMode: GlowOutputMode = .composited,
+        tileSize: Int? = nil,
+        isCancelled: () -> Bool = { false },
+        onTileCompleted: (Int, Int) -> Void = { _, _ in }
+    ) throws -> GlowProcessingOutcome {
+        guard original.width == output.width, original.height == output.height else {
+            throw GlowPipelineError.sizeMismatch
+        }
+
+        // 途中で中止されても壊れた画像が残らないよう、先に原画（グローのみ表示なら黒）で埋める
+        switch outputMode {
+        case .composited:
+            try copy(from: original, to: output)
+        case .glowOnly:
+            try clear(output)
+        }
+
+        guard !layers.isEmpty else {
+            onTileCompleted(1, 1)
+            return .completed
+        }
+
+        guard layers.count <= GlowPipeline.maximumLayerCount else {
+            throw GlowPipelineError.tooManyLayers(GlowPipeline.maximumLayerCount)
+        }
+
+        var glows: [MTLTexture] = []
+        var completedTiles = 0
+        var totalTiles = 0
+
+        for (index, layer) in layers.enumerated() {
+            let glow = try makeGlowTexture(width: original.width, height: original.height)
+
+            let outcome = try processLayerGlow(
+                original: original,
+                output: glow,
+                layer: layer,
+                tileSize: tileSize,
+                isCancelled: isCancelled,
+                onTileCompleted: { completed, total in
+                    // レイヤーをまたいだ通し番号へ変換する
+                    totalTiles = total * layers.count
+                    completedTiles = total * index + completed
+                    onTileCompleted(completedTiles, totalTiles)
+                }
+            )
+
+            guard outcome == .completed else {
+                return .cancelled
+            }
+
+            glows.append(glow)
+        }
+
+        try compositeLayers(
+            original: original,
+            glows: glows,
+            layers: layers,
+            output: output,
+            glowOnly: outputMode == .glowOnly
+        )
+
+        return .completed
+    }
+
+    /// タイル 1 枚分のパスをエンコードする（レイヤー 1 枚ぶん）。
+    private func encodeLayerTile(
         encoder: MTLComputeCommandEncoder,
         tile: GlowTile,
         imageWidth: Int,
         imageHeight: Int,
         original: MTLTexture,
         output: MTLTexture,
-        outputMode: GlowOutputMode,
-        resources: [LayerResource],
+        resource: LayerResource,
         star: MTLTexture,
         work: MTLTexture,
-        accumulators: [MTLTexture],
-        composites: [MTLTexture]
+        accumulators: [MTLTexture]
     ) {
         let offset = tile.outputOffsetInSource
         var params = GlowTileParams(
@@ -366,137 +550,100 @@ final class GlowPipeline {
 
         let regionWidth = tile.source.width
         let regionHeight = tile.source.height
+        let spec = resource.spec
 
-        // 合成先を初期化する。
-        // グローのみ表示では黒から始め、すべてのレイヤーを加算する。
-        var compositeIndex = 0
+        // 1. 背景推定（横 → 縦の 2 パス）
+        if spec.subtractsBackground, let backgroundWeights = resource.backgroundWeights {
+            params.radius = Int32(resource.backgroundRadius)
+
+            dispatch(
+                encoder: encoder,
+                kernel: .blurHorizontalFromImage,
+                textures: [original, star],
+                params: &params,
+                weights: backgroundWeights,
+                width: regionWidth,
+                height: regionHeight
+            )
+
+            dispatch(
+                encoder: encoder,
+                kernel: .blurVertical,
+                textures: [star, work],
+                params: &params,
+                weights: backgroundWeights,
+                width: regionWidth,
+                height: regionHeight
+            )
+        }
+
+        // 2. 星成分の抽出（背景減算 + ノイズ下限）
+        params.hasBackground = spec.subtractsBackground ? 1 : 0
+        params.threshold = spec.noiseThreshold
         dispatch(
             encoder: encoder,
-            kernel: outputMode == .glowOnly ? .clearAccumulator : .initializeBase,
-            textures: outputMode == .glowOnly
-                ? [composites[compositeIndex]]
-                : [original, composites[compositeIndex]],
+            kernel: .extractStars,
+            textures: [original, work, star],
             params: &params,
             weights: nil,
             width: regionWidth,
             height: regionHeight
         )
 
-        for resource in resources {
-            let spec = resource.spec
-
-            // 1. 背景推定（横 → 縦の 2 パス）
-            if spec.subtractsBackground, let backgroundWeights = resource.backgroundWeights {
-                params.radius = Int32(resource.backgroundRadius)
-
-                dispatch(
-                    encoder: encoder,
-                    kernel: .blurHorizontalFromImage,
-                    textures: [original, star],
-                    params: &params,
-                    weights: backgroundWeights,
-                    width: regionWidth,
-                    height: regionHeight
-                )
-
-                dispatch(
-                    encoder: encoder,
-                    kernel: .blurVertical,
-                    textures: [star, work],
-                    params: &params,
-                    weights: backgroundWeights,
-                    width: regionWidth,
-                    height: regionHeight
-                )
-            }
-
-            // 2. 星成分の抽出（背景減算 + ノイズ下限）
-            params.hasBackground = spec.subtractsBackground ? 1 : 0
-            params.threshold = spec.noiseThreshold
-            dispatch(
-                encoder: encoder,
-                kernel: .extractStars,
-                textures: [original, work, star],
-                params: &params,
-                weights: nil,
-                width: regionWidth,
-                height: regionHeight
-            )
-
-            // 3. 4 成分 PSF でグローを作る
-            var accumulatorIndex = 0
-            dispatch(
-                encoder: encoder,
-                kernel: .clearAccumulator,
-                textures: [accumulators[accumulatorIndex]],
-                params: &params,
-                weights: nil,
-                width: regionWidth,
-                height: regionHeight
-            )
-
-            for component in resource.components {
-                params.radius = Int32(component.radius)
-                params.weight = component.weight
-                params.componentThreshold = component.brightnessThreshold
-
-                dispatch(
-                    encoder: encoder,
-                    kernel: .blurHorizontal,
-                    textures: [star, work],
-                    params: &params,
-                    weights: component.weights,
-                    width: regionWidth,
-                    height: regionHeight
-                )
-
-                dispatch(
-                    encoder: encoder,
-                    kernel: .blurVerticalAccumulate,
-                    textures: [work, accumulators[accumulatorIndex], accumulators[1 - accumulatorIndex]],
-                    params: &params,
-                    weights: component.weights,
-                    width: regionWidth,
-                    height: regionHeight
-                )
-
-                accumulatorIndex = 1 - accumulatorIndex
-            }
-
-            // 4. マスク適用後に Screen / Add で合成する（マスクは Phase 5 で接続）
-            params.gain = spec.gain
-            // グローのみ表示では合成モードによらず加算する（成分そのものを見るため）
-            params.blendMode = outputMode == .glowOnly
-                ? 1
-                : (spec.blendMode == .screen ? 0 : 1)
-            dispatch(
-                encoder: encoder,
-                kernel: .compositeGlow,
-                textures: [
-                    composites[compositeIndex],
-                    accumulators[accumulatorIndex],
-                    composites[1 - compositeIndex]
-                ],
-                params: &params,
-                weights: nil,
-                width: regionWidth,
-                height: regionHeight
-            )
-
-            compositeIndex = 1 - compositeIndex
-        }
-
-        // 5. マージンを捨て、中央部だけを書き戻す
+        // 3. 4 成分 PSF でグローを作る
+        var accumulatorIndex = 0
         dispatch(
             encoder: encoder,
-            kernel: .writeTileOutput,
-            textures: [composites[compositeIndex], output],
+            kernel: .clearAccumulator,
+            textures: [accumulators[accumulatorIndex]],
+            params: &params,
+            weights: nil,
+            width: regionWidth,
+            height: regionHeight
+        )
+
+        for component in resource.components {
+            params.radius = Int32(component.radius)
+            params.weight = component.weight
+            params.componentThreshold = component.brightnessThreshold
+
+            dispatch(
+                encoder: encoder,
+                kernel: .blurHorizontal,
+                textures: [star, work],
+                params: &params,
+                weights: component.weights,
+                width: regionWidth,
+                height: regionHeight
+            )
+
+            dispatch(
+                encoder: encoder,
+                kernel: .blurVerticalAccumulate,
+                textures: [work, accumulators[accumulatorIndex], accumulators[1 - accumulatorIndex]],
+                params: &params,
+                weights: component.weights,
+                width: regionWidth,
+                height: regionHeight
+            )
+
+            accumulatorIndex = 1 - accumulatorIndex
+        }
+
+        // 4. マージンを捨て、中央部だけを書き戻す。
+        //    ゲインは描画時に掛けるので、ここでは 1 に丸めない。
+        dispatch(
+            encoder: encoder,
+            kernel: .writeTileOutputUnclamped,
+            textures: [accumulators[accumulatorIndex], output],
             params: &params,
             weights: nil,
             width: tile.output.width,
             height: tile.output.height
         )
     }
+
+
 
     private func dispatch(
         encoder: MTLComputeCommandEncoder,

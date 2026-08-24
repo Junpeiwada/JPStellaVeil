@@ -20,12 +20,7 @@ struct LayerPanel: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            Divider()
-
-            ApplyBar()
         }
-        .frame(minWidth: 280, idealWidth: 320)
     }
 }
 
@@ -34,7 +29,7 @@ struct LayerPanel: View {
 /// フル解像度処理の起動、進捗、中止をまとめた領域。
 ///
 /// スライダー操作では処理を走らせない。処理はここで明示的に開始する。
-private struct ApplyBar: View {
+struct ApplyBar: View {
     @EnvironmentObject private var appState: AppState
 
     private var hasLayers: Bool {

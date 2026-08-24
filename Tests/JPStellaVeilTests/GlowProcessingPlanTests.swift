@@ -156,6 +156,44 @@ final class GlowProcessingPlanTests: XCTestCase {
         XCTAssertEqual(spec.apron, GaussianKernel.radius(sigma: (20.0 / 3.0) * 2.2))
     }
 
+    // MARK: - 再処理の要否
+
+    /// 描画時に適用できる値の変更では、畳み込みをやり直す必要がない。
+    func testConvolutionKeyIgnoresParametersAppliedAtDrawTime() {
+        var layer = GlowLayer.makePreset(.standard)
+        let before = GlowConvolutionKey(layer: layer)
+
+        layer.opacity = 0.9
+        layer.glow.intensity = 3.0
+        layer.blendMode = .add
+        layer.isVisible = false
+        layer.name = "変更後"
+
+        XCTAssertEqual(before, GlowConvolutionKey(layer: layer))
+    }
+
+    /// 畳み込みの前段にある値が変わったら再処理が要る。
+    func testConvolutionKeyDetectsConvolutionParameters() {
+        let base = GlowLayer.makePreset(.standard)
+        let baseKey = GlowConvolutionKey(layer: base)
+
+        var radiusChanged = base
+        radiusChanged.glow.radius = 40
+        XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: radiusChanged))
+
+        var backgroundChanged = base
+        backgroundChanged.extraction.backgroundRemoval = 30
+        XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: backgroundChanged))
+
+        var thresholdChanged = base
+        thresholdChanged.extraction.noiseThreshold = 0.02
+        XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: thresholdChanged))
+
+        var responseChanged = base
+        responseChanged.glow.brightnessResponse = 0.9
+        XCTAssertNotEqual(baseKey, GlowConvolutionKey(layer: responseChanged))
+    }
+
     // MARK: - 画素矩形
 
     func testPixelRectExpandAndClamp() {

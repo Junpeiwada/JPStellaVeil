@@ -153,6 +153,28 @@ enum BlendMath {
     }
 }
 
+// MARK: - 再処理の要否判定
+
+/// 畳み込みの結果に影響するパラメータ。
+///
+/// グローは「畳み込み → ゲイン → 合成」の順に処理される。
+/// 後段（強度、不透明度、合成モード、表示/非表示）は線形なので描画時に適用でき、
+/// 変更しても畳み込みをやり直す必要がない。
+/// ここに含まれる値が変わったときだけ、そのレイヤーを再処理する。
+struct GlowConvolutionKey: Equatable {
+    let radius: Double
+    let backgroundRemoval: Double
+    let noiseThreshold: Double
+    let brightnessResponse: Double
+
+    init(layer: GlowLayer) {
+        self.radius = layer.glow.radius
+        self.backgroundRemoval = layer.extraction.backgroundRemoval
+        self.noiseThreshold = layer.extraction.noiseThreshold
+        self.brightnessResponse = layer.glow.brightnessResponse
+    }
+}
+
 // MARK: - レイヤーごとの処理仕様
 
 /// `GlowLayer` の UI パラメータを、GPU 処理に必要な物理量へ変換したもの。
@@ -176,6 +198,9 @@ struct GlowLayerProcessingSpec: Equatable {
     let componentThresholds: [Float]
 
     /// グローに掛ける総合ゲイン（強度 x 不透明度）。
+    ///
+    /// 畳み込みの後段なので、レイヤー別グローを保持する構成では描画時に適用する。
+    /// 書き出し時の合成でも同じ値を使う。
     let gain: Float
 
     let blendMode: BlendMode

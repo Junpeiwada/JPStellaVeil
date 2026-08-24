@@ -44,10 +44,12 @@ final class AppState: ObservableObject {
     @Published private(set) var processingState: GlowProcessingState = .idle
 
     /// キャンバスに何を表示するか（合成結果／グロー成分のみ）。
+    ///
+    /// グローはレイヤー別に保持してあるので、切り替えても再処理は要らない。
     @Published var previewMode: GlowOutputMode = .composited {
         didSet {
             guard previewMode != oldValue else { return }
-            requestPreviewUpdate()
+            refreshDisplay()
         }
     }
 
@@ -100,8 +102,8 @@ final class AppState: ObservableObject {
                 self?.handleProcessingState(state)
             }
 
-            controller.onProcessedTextureChange = { [weak self] texture in
-                self?.canvasRenderer?.processedTexture = texture
+            controller.onDisplaySetChange = { [weak self] set in
+                self?.applyDisplaySet(set)
             }
 
             processingController = controller
@@ -202,6 +204,12 @@ final class AppState: ObservableObject {
 
     /// プリセットからレイヤーを追加し、選択状態にする。
     func addLayer(preset: GlowPreset) {
+        let maximum = processingController?.maximumLayerCount ?? GlowPipeline.maximumLayerCount
+        guard project.layers.count < maximum else {
+            lastStatusMessage = "レイヤーは \(maximum) 枚までです"
+            return
+        }
+
         let layer = GlowLayer.makePreset(preset)
         project.addLayer(layer)
         selectedLayerID = layer.id
@@ -211,6 +219,12 @@ final class AppState: ObservableObject {
 
     /// 選択中レイヤーを複製する。
     func duplicateSelectedLayer() {
+        let maximum = processingController?.maximumLayerCount ?? GlowPipeline.maximumLayerCount
+        guard project.layers.count < maximum else {
+            lastStatusMessage = "レイヤーは \(maximum) 枚までです"
+            return
+        }
+
         guard let selectedLayerID,
               let newID = project.duplicateLayer(id: selectedLayerID) else {
             return
@@ -236,15 +250,17 @@ final class AppState: ObservableObject {
     }
 
     /// 表示/非表示を切り替える。
+    ///
+    /// グローは保持済みなので再処理は要らない。描画時に反映される。
     func toggleLayerVisibility(id: UUID) {
         guard project.toggleLayerVisibility(id: id) else { return }
-        requestPreviewUpdate()
+        refreshDisplay()
     }
 
-    /// レイヤーの並べ替え。
+    /// レイヤーの並べ替え。合成順が変わるだけなので再処理は要らない。
     func moveLayers(fromOffsets source: IndexSet, toOffset destination: Int) {
         project.moveLayers(fromOffsets: source, toOffset: destination)
-        requestPreviewUpdate()
+        refreshDisplay()
     }
 
     /// レイヤーを名称変更する。
@@ -258,15 +274,46 @@ final class AppState: ObservableObject {
     }
 
     /// レイヤーのパラメータを更新する。値は有効範囲へ丸められる。
+    ///
+    /// 畳み込みに影響する値（半径、背景除去、ノイズ閾値、明るさ応答）が変わったときだけ
+    /// 再処理する。強度や不透明度、合成モードは描画時に適用するので再処理は要らない。
     func updateLayer(id: UUID, transform: (inout GlowLayer) -> Void) {
+        let keyBefore = project.layer(id: id).map(GlowConvolutionKey.init)
+
         guard project.updateLayer(id: id, transform: transform) else { return }
-        requestPreviewUpdate()
+
+        let keyAfter = project.layer(id: id).map(GlowConvolutionKey.init)
+
+        if keyBefore != keyAfter {
+            requestPreviewUpdate()
+        } else {
+            refreshDisplay()
+        }
     }
 
     /// 選択中レイヤーのパラメータを更新する。
     func updateSelectedLayer(transform: (inout GlowLayer) -> Void) {
         guard let selectedLayerID else { return }
         updateLayer(id: selectedLayerID, transform: transform)
+    }
+
+    /// 保持しているグロー一式を描画側へ渡す。
+    private func applyDisplaySet(_ set: GlowDisplaySet) {
+        guard let renderer = canvasRenderer else { return }
+
+        renderer.glowTextures = set.textures
+        renderer.layerUniforms = set.layers.map { GlowPipeline.makeLayerParams(for: $0) }
+        renderer.isGlowOnly = (previewMode == .glowOnly)
+        canvasDisplay.requestRedraw()
+    }
+
+    /// 表示だけを更新する。
+    ///
+    /// 強度、不透明度、合成モード、表示切替、並べ替え、グローのみ表示は
+    /// 畳み込みの後段なので、保持してあるグローを使い回して描画し直すだけでよい。
+    private func refreshDisplay() {
+        guard let controller = processingController else { return }
+        applyDisplaySet(controller.currentDisplaySet(for: project.layers))
     }
 
     /// プレビュー再計算の要求。
@@ -332,10 +379,11 @@ final class AppState: ObservableObject {
         autoApplyWorkItem?.cancel()
         autoApplyWorkItem = nil
 
+        // 非表示のレイヤーも畳み込んでおく。
+        // そうしておけば表示切替が再処理なしで即座に反映される。
         controller.start(
             original: original,
-            layers: project.visibleLayers,
-            outputMode: previewMode,
+            layers: project.layers,
             generation: previewUpdateGeneration
         )
     }
@@ -443,7 +491,13 @@ final class AppState: ObservableObject {
             }
 
             do {
-                processedImage = try processingController?.currentProcessedImage()
+                if let original = canvasRenderer?.originalTexture {
+                    // 表示と同じ式でフル解像度合成する
+                    processedImage = try processingController?.makeCompositedImage(
+                        original: original,
+                        layers: project.layers
+                    )
+                }
             } catch {
                 lastStatusMessage = "処理結果を取り出せませんでした: \(error.localizedDescription)"
                 return

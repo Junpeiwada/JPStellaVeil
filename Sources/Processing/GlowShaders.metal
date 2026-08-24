@@ -262,6 +262,78 @@ kernel void compositeGlow(
     destination.write(float4(result, 1.0), gid);
 }
 
+/// タイルの中央部を、クリップせずに出力テクスチャへ書き戻す。
+///
+/// レイヤー別のグローは `rgba16Float` で保持し、強度や不透明度は描画時に掛ける。
+/// ここで 1 に丸めてしまうと、あとから強度を上げたときに頭打ちになる。
+kernel void writeTileOutputUnclamped(
+    texture2d<float, access::read> source [[texture(0)]],
+    texture2d<float, access::write> destination [[texture(1)]],
+    constant GlowTileParams &params [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= params.outputSize.x || gid.y >= params.outputSize.y) {
+        return;
+    }
+
+    float3 color = max(source.read(params.outputOffset + gid).rgb, 0.0);
+    destination.write(float4(color, 1.0), params.outputOrigin + gid);
+}
+
+/// レイヤー合成のパラメータ。Swift 側の CompositeParams と一致させる。
+struct CompositeParams {
+    uint2 imageSize;
+    uint layerCount;
+    // 1 なら原画を含めず、グロー成分だけを合成する
+    uint glowOnly;
+};
+
+/// レイヤー 1 枚分の合成パラメータ。Swift 側の CompositeLayerParams と一致させる。
+struct CompositeLayerParams {
+    // 強度 x 不透明度
+    float gain;
+    // 0 = Screen, 1 = Add
+    uint blendMode;
+    uint isVisible;
+    uint padding;
+};
+
+/// 保持してあるレイヤー別グローを原画へ合成する（書き出し用）。
+///
+/// 画素ごとに独立した計算なのでタイル分割は要らない。
+/// 表示側の `canvasFragment` と同じ式にしてあるので、
+/// プレビューと書き出しの見え方は一致する。
+kernel void compositeLayers(
+    texture2d<float, access::read> original [[texture(0)]],
+    texture2d<float, access::write> destination [[texture(1)]],
+    array<texture2d<float, access::read>, 8> glows [[texture(2)]],
+    constant CompositeParams &params [[buffer(0)]],
+    constant CompositeLayerParams *layers [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= params.imageSize.x || gid.y >= params.imageSize.y) {
+        return;
+    }
+
+    float3 color = params.glowOnly != 0 ? float3(0.0) : original.read(gid).rgb;
+
+    for (uint index = 0; index < params.layerCount; ++index) {
+        if (layers[index].isVisible == 0) {
+            continue;
+        }
+
+        float3 glow = max(glows[index].read(gid).rgb * layers[index].gain, 0.0);
+
+        if (params.glowOnly != 0 || layers[index].blendMode != 0) {
+            color += glow;
+        } else {
+            color = 1.0 - (1.0 - color) * (1.0 - saturate(glow));
+        }
+    }
+
+    destination.write(float4(saturate(color), 1.0), gid);
+}
+
 /// タイルの中央部だけを出力テクスチャへ書き戻す。
 /// マージン部分は隣のタイルが担当するので捨てる。
 kernel void writeTileOutput(

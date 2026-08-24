@@ -18,6 +18,26 @@ struct CanvasUniforms {
 
     // マスクテクスチャが有効なら 1
     uint hasMask;
+
+    // 合成するグローレイヤーの枚数
+    uint layerCount;
+
+    // 1 ならグロー成分だけを表示する（原画を含めない）
+    uint glowOnly;
+};
+
+/// レイヤー 1 枚分の合成パラメータ。
+/// Swift 側の CompositeLayerParams と一致させる。
+struct CanvasLayerUniform {
+    // 強度 x 不透明度
+    float gain;
+
+    // 0 = Screen, 1 = Add
+    uint blendMode;
+
+    uint isVisible;
+
+    uint padding;
 };
 
 struct VertexOut {
@@ -71,10 +91,11 @@ static float3 linearToSRGB(float3 color) {
 
 fragment float4 canvasFragment(
     VertexOut in [[stage_in]],
-    texture2d<float> processedTexture [[texture(0)]],
-    texture2d<float> originalTexture [[texture(1)]],
-    texture2d<float> maskTexture [[texture(2)]],
-    constant CanvasUniforms &uniforms [[buffer(0)]]
+    texture2d<float> originalTexture [[texture(0)]],
+    texture2d<float> maskTexture [[texture(1)]],
+    array<texture2d<float>, 8> glowTextures [[texture(2)]],
+    constant CanvasUniforms &uniforms [[buffer(0)]],
+    constant CanvasLayerUniform *layers [[buffer(1)]]
 ) {
     constexpr sampler textureSampler(
         filter::linear,
@@ -82,8 +103,27 @@ fragment float4 canvasFragment(
         address::clamp_to_edge
     );
 
-    float3 processed = processedTexture.sample(textureSampler, in.texCoord).rgb;
     float3 original = originalTexture.sample(textureSampler, in.texCoord).rgb;
+
+    // レイヤー別に保持してあるグローをここで合成する。
+    // 畳み込みの後段は線形なので、強度・不透明度・合成モード・表示切替は
+    // 再処理なしでこの場に反映できる。
+    // 書き出し側の compositeLayers と同じ式にすること。
+    float3 processed = uniforms.glowOnly != 0 ? float3(0.0) : original;
+
+    for (uint index = 0; index < uniforms.layerCount; ++index) {
+        if (layers[index].isVisible == 0) {
+            continue;
+        }
+
+        float3 glow = max(glowTextures[index].sample(textureSampler, in.texCoord).rgb * layers[index].gain, 0.0);
+
+        if (uniforms.glowOnly != 0 || layers[index].blendMode != 0) {
+            processed += glow;
+        } else {
+            processed = 1.0 - (1.0 - processed) * (1.0 - saturate(glow));
+        }
+    }
 
     // 元画像比較（押下中）は全面を原画に置き換える。
     // スプリット比較は境界より右側だけを処理結果にする。

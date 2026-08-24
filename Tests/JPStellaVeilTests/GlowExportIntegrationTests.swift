@@ -182,6 +182,76 @@ final class GlowExportIntegrationTests: XCTestCase {
         XCTAssertTrue(appState.isAutoApplyEnabled, "手動の適用で自動処理が再開すること")
     }
 
+    /// 描画時に適用できる変更では再処理を要求しないこと。
+    ///
+    /// グローをレイヤー別に保持しているので、強度や不透明度、表示切替、並べ替えは
+    /// 保持済みのグローを使い回して描画し直すだけで済む。
+    func testDisplayOnlyChangesDoNotRequestReprocessing() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal を利用できない環境")
+        }
+
+        let service = TIFFImageIOService()
+        let inputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glow-display-only-input.tif")
+        defer { try? FileManager.default.removeItem(at: inputURL) }
+
+        try service.writeTIFF(image: try makeStarFieldImage(width: 64, height: 64), to: inputURL)
+
+        let appState = AppState()
+        appState.openTIFF(url: inputURL)
+
+        guard appState.hasImage else {
+            throw XCTSkip("テスト用 TIFF を開けない環境")
+        }
+
+        appState.addLayer(preset: .standard)
+        guard let layerID = appState.selectedLayerID else {
+            XCTFail("レイヤーを追加できていない")
+            return
+        }
+
+        let baseline = appState.previewUpdateGeneration
+
+        // 描画時に適用できる変更
+        appState.updateLayer(id: layerID) { $0.opacity = 0.9 }
+        appState.updateLayer(id: layerID) { $0.glow.intensity = 3.0 }
+        appState.updateLayer(id: layerID) { $0.blendMode = .add }
+        appState.toggleLayerVisibility(id: layerID)
+        appState.previewMode = .glowOnly
+
+        XCTAssertEqual(
+            appState.previewUpdateGeneration,
+            baseline,
+            "描画時に適用できる変更で再処理が要求されている"
+        )
+
+        // 畳み込みからやり直す必要がある変更
+        appState.updateLayer(id: layerID) { $0.glow.radius = 40 }
+        XCTAssertGreaterThan(appState.previewUpdateGeneration, baseline)
+
+        let afterRadius = appState.previewUpdateGeneration
+        appState.updateLayer(id: layerID) { $0.glow.brightnessResponse = 0.9 }
+        XCTAssertGreaterThan(appState.previewUpdateGeneration, afterRadius)
+    }
+
+    /// レイヤー数の上限を超えて追加できないこと。
+    func testLayerCountIsLimited() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal を利用できない環境")
+        }
+
+        let appState = AppState()
+        let maximum = GlowPipeline.maximumLayerCount
+
+        for _ in 0..<(maximum + 3) {
+            appState.addLayer(preset: .standard)
+        }
+
+        XCTAssertEqual(appState.project.layers.count, maximum)
+        XCTAssertTrue(appState.lastStatusMessage.contains("\(maximum) 枚まで"))
+    }
+
     /// 未適用の変更があるうちは書き出さないこと。
     func testExportIsBlockedWhileChangesAreUnapplied() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {
