@@ -97,6 +97,8 @@ struct CompositeParams {
     var imageSize: SIMD2<UInt32>
     var layerCount: UInt32
     var glowOnly: UInt32
+    var hasMask: UInt32
+    var padding: UInt32
 }
 
 /// シェーダの CompositeLayerParams と一致させる構造体。
@@ -565,6 +567,7 @@ final class GlowPipeline {
         original: MTLTexture,
         glows: [MTLTexture],
         layers: [GlowLayer],
+        mask: MTLTexture? = nil,
         output: MTLTexture,
         glowOnly: Bool
     ) throws {
@@ -590,17 +593,21 @@ final class GlowPipeline {
         encoder.setTexture(original, index: 0)
         encoder.setTexture(output, index: 1)
 
-        // 使わないスロットにも何かを割り当てておく（未バインドのまま実行しないため）
+        // マスクが無いときも何かを割り当てておく（未バインドのまま実行しないため）
+        encoder.setTexture(mask ?? original, index: 2)
+
         var textures = [MTLTexture?](repeating: original, count: GlowPipeline.maximumLayerCount)
         for (index, glow) in glows.enumerated() {
             textures[index] = glow
         }
-        encoder.setTextures(textures, range: 2..<(2 + GlowPipeline.maximumLayerCount))
+        encoder.setTextures(textures, range: 3..<(3 + GlowPipeline.maximumLayerCount))
 
         var params = CompositeParams(
             imageSize: SIMD2(UInt32(output.width), UInt32(output.height)),
             layerCount: UInt32(glows.count),
-            glowOnly: glowOnly ? 1 : 0
+            glowOnly: glowOnly ? 1 : 0,
+            hasMask: mask != nil ? 1 : 0,
+            padding: 0
         )
         encoder.setBytes(&params, length: MemoryLayout<CompositeParams>.stride, index: 0)
 
@@ -657,6 +664,7 @@ final class GlowPipeline {
         original: MTLTexture,
         output: MTLTexture,
         layers: [GlowLayer],
+        mask: MTLTexture? = nil,
         outputMode: GlowOutputMode = .composited,
         tileSize: Int? = nil,
         isCancelled: () -> Bool = { false },
@@ -715,6 +723,7 @@ final class GlowPipeline {
             original: original,
             glows: glows,
             layers: layers,
+            mask: mask,
             output: output,
             glowOnly: outputMode == .glowOnly
         )

@@ -259,6 +259,7 @@ final class GlowProcessingController {
     func makeCompositedImage(
         original: MTLTexture,
         layers: [GlowLayer],
+        mask: MTLTexture? = nil,
         glowOnly: Bool = false
     ) throws -> CGImage? {
         let set = currentDisplaySet(for: layers)
@@ -270,6 +271,7 @@ final class GlowProcessingController {
             original: original,
             glows: set.textures,
             layers: set.layers,
+            mask: mask,
             output: output,
             glowOnly: glowOnly
         )

@@ -142,6 +142,71 @@ struct MetalTextureLoader {
         return texture
     }
 
+    /// グレースケール画像をマスク用テクスチャ（r16Unorm）へ読み込む。
+    ///
+    /// マスクは 1 成分あれば足りるので、RGBA で持つ必要はない。
+    /// 8640 x 5760 なら RGBA16 で 400MB のところ、100MB で済む。
+    func makeMaskTexture(from image: CGImage) throws -> MTLTexture {
+        let width = image.width
+        let height = image.height
+        let maxDimension = device.maxTextureDimension
+
+        guard width > 0, height > 0, width <= maxDimension, height <= maxDimension else {
+            throw MetalTextureLoaderError.imageTooLarge(
+                width: width,
+                height: height,
+                maxDimension: maxDimension
+            )
+        }
+
+        let bytesPerRow = width * 2
+        var pixelBuffer = [UInt16](repeating: 0, count: width * height)
+
+        let contextCreated = pixelBuffer.withUnsafeMutableBytes { rawBuffer -> Bool in
+            guard let context = CGContext(
+                data: rawBuffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 16,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGBitmapInfo.byteOrder16Little
+                    .union(.init(rawValue: CGImageAlphaInfo.none.rawValue)).rawValue
+            ) else {
+                return false
+            }
+
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+
+        guard contextCreated else {
+            throw MetalTextureLoaderError.cannotCreateContext
+        }
+
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = .r16Unorm
+        descriptor.width = width
+        descriptor.height = height
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .managed
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw MetalTextureLoaderError.cannotCreateTexture
+        }
+
+        pixelBuffer.withUnsafeBytes { rawBuffer in
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: rawBuffer.baseAddress!,
+                bytesPerRow: bytesPerRow
+            )
+        }
+
+        return texture
+    }
+
     /// テクスチャを 16bit リニア RGB の CGImage として取り出す。
     ///
     /// 処理結果をそのまま TIFF 書き出しへ渡すために使う。

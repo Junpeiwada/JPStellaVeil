@@ -122,6 +122,11 @@ fragment float4 canvasFragment(
 
     float3 original = originalTexture.sample(textureSampler, uv).rgb;
 
+    // 空マスク。白い場所（空）だけにグローを乗せる。マスクが無ければ全面に乗せる。
+    float maskValue = uniforms.hasMask != 0
+        ? maskTexture.sample(textureSampler, uv).r
+        : 1.0;
+
     // レイヤー別に保持してあるグローをここで合成する。
     // 畳み込みの後段は線形なので、強度・不透明度・合成モード・表示切替は
     // 再処理なしでこの場に反映できる。
@@ -133,7 +138,10 @@ fragment float4 canvasFragment(
             continue;
         }
 
-        float3 glow = max(glowTextures[index].sample(textureSampler, uv).rgb * layers[index].gain, 0.0);
+        float3 glow = max(
+            glowTextures[index].sample(textureSampler, uv).rgb * layers[index].gain * maskValue,
+            0.0
+        );
 
         if (uniforms.glowOnly != 0 || layers[index].blendMode != 0) {
             processed += glow;

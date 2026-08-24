@@ -526,6 +526,94 @@ final class GlowPipelineTests: XCTestCase {
         )
     }
 
+    /// マスクが黒い場所にはグローが乗らないこと。
+    func testMaskExcludesGlowFromMaskedArea() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+
+        // 上下に 1 つずつ星を置く
+        let topStar = (x: 32, y: 16)
+        let bottomStar = (x: 32, y: 48)
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            let isTop = abs(x - topStar.x) <= 1 && abs(y - topStar.y) <= 1
+            let isBottom = abs(x - bottomStar.x) <= 1 && abs(y - bottomStar.y) <= 1
+            return (isTop || isBottom) ? 0.9 : 0.0
+        }
+
+        // 上半分だけ白いマスク（下半分は除外）
+        let mask = try makeMaskTexture(device: pipeline.device, width: width, height: height) { _, y in
+            y < height / 2 ? 1.0 : 0.0
+        }
+
+        var layer = makeTestLayer()
+        layer.blendMode = .add
+        layer.extraction.backgroundRemoval = 0
+        layer.extraction.brightnessFloor = 0
+
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+        try pipeline.process(
+            original: input,
+            output: output,
+            layers: [layer],
+            mask: mask,
+            outputMode: .glowOnly
+        )
+
+        let result = readValues(from: output, pipeline: pipeline)
+
+        XCTAssertGreaterThan(
+            result[topStar.y * width + topStar.x],
+            0.0,
+            "マスクが白い場所にグローが乗っていない"
+        )
+
+        XCTAssertEqual(
+            result[bottomStar.y * width + bottomStar.x],
+            0.0,
+            accuracy: 1e-4,
+            "マスクが黒い場所にグローが乗っている"
+        )
+    }
+
+    /// マスク用テクスチャ（r16Unorm）を作る。
+    private func makeMaskTexture(
+        device: MTLDevice,
+        width: Int,
+        height: Int,
+        value: (Int, Int) -> Float
+    ) throws -> MTLTexture {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.pixelFormat = .r16Unorm
+        descriptor.width = width
+        descriptor.height = height
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw XCTSkip("マスクテクスチャを確保できない")
+        }
+
+        var pixels = [UInt16](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                pixels[y * width + x] = UInt16(max(0, min(1, value(x, y))) * 65535)
+            }
+        }
+
+        pixels.withUnsafeBytes { raw in
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: raw.baseAddress!,
+                bytesPerRow: width * 2
+            )
+        }
+
+        return texture
+    }
+
     /// 星の明るさ分布を測れること。
     func testMeasureStarHistogramFindsBrightPixels() throws {
         let pipeline = try makePipeline()

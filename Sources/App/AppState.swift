@@ -84,6 +84,18 @@ final class AppState: ObservableObject {
     /// ファイルを読み込み中か。
     @Published private(set) var isLoadingImage: Bool = false
 
+    /// 空マスクを生成中か。
+    @Published private(set) var isGeneratingSkyMask: Bool = false
+
+    /// 生成済みの空マスクの情報。
+    @Published private(set) var skyMask: SkyMaskResult?
+
+    /// 空マスクの生成を担当する。
+    private let skyMaskService = SkyMaskService()
+
+    /// 空マスク生成用のキュー。Photoshop の応答を待つ間 UI を止めない。
+    private let maskQueue = DispatchQueue(label: "com.example.jpstellaveil.sky-mask", qos: .userInitiated)
+
     /// ファイル読み込み用のキュー。
     ///
     /// 数百 MB の TIFF ではハッシュ計算とデコードだけで数秒かかる。
@@ -246,6 +258,7 @@ final class AppState: ObservableObject {
         }
 
         renderer.setOriginalTexture(texture)
+        skyMask = nil
 
         // 新しい画像を開いたら表示状態と処理結果を初期化する
         canvasViewState = CanvasViewState()
@@ -451,6 +464,81 @@ final class AppState: ObservableObject {
         )
     }
 
+    // MARK: - 空マスク
+
+    /// 空マスクの自動生成が使えるか。
+    var canGenerateSkyMask: Bool {
+        hasImage && !isGeneratingSkyMask && skyMaskService.isAvailable
+    }
+
+    /// 空マスクが使えない理由（UI 表示用）。
+    var skyMaskUnavailableReason: String? {
+        if skyMaskService.isAvailable { return nil }
+        return "Photoshop が見つかりません（空マスクの自動生成には Photoshop 2021 以降が必要です）"
+    }
+
+    /// Photoshop の「空を選択」で空マスクを作る。
+    ///
+    /// 自前で空を判定するより実用精度が高いので、生成は Photoshop に任せている。
+    /// 入力ファイルは開かれるだけで変更されない。
+    func generateSkyMask() {
+        guard let inputPath = project.inputImage?.filePath else {
+            lastStatusMessage = "入力TIFFが選択されていません"
+            return
+        }
+
+        guard !isGeneratingSkyMask else { return }
+
+        guard let device = canvasRenderer?.device else {
+            lastStatusMessage = "キャンバスを初期化できていません"
+            return
+        }
+
+        isGeneratingSkyMask = true
+        lastStatusMessage = "空マスクを生成中…（Photoshop）"
+
+        let inputURL = URL(fileURLWithPath: inputPath)
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("JPStellaVeil-skymask.tif")
+        let service = skyMaskService
+        let imageService = tiffService
+
+        maskQueue.async { [weak self] in
+            do {
+                let result = try service.generateMask(inputURL: inputURL, outputURL: outputURL)
+                let maskImage = try imageService.loadImage(at: result.maskURL)
+                let texture = try MetalTextureLoader(device: device).makeMaskTexture(from: maskImage)
+
+                DispatchQueue.main.async {
+                    guard let self else { return }
+
+                    self.isGeneratingSkyMask = false
+                    self.skyMask = result
+                    self.canvasRenderer?.maskTexture = texture
+                    self.canvasViewState.isMaskOverlayVisible = true
+                    self.lastStatusMessage = "空マスクを生成しました（\(result.width) x \(result.height)）"
+                    self.refreshDisplay()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+
+                    self.isGeneratingSkyMask = false
+                    self.lastStatusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// 生成した空マスクを捨てる。
+    func clearSkyMask() {
+        skyMask = nil
+        canvasRenderer?.maskTexture = nil
+        canvasViewState.isMaskOverlayVisible = false
+        lastStatusMessage = "空マスクを解除しました"
+        refreshDisplay()
+    }
+
     // MARK: - グロー処理
 
     /// 適用されていないパラメータ変更があるか。
@@ -605,7 +693,8 @@ final class AppState: ObservableObject {
                     // 表示と同じ式でフル解像度合成する
                     processedImage = try processingController?.makeCompositedImage(
                         original: original,
-                        layers: project.layers
+                        layers: project.layers,
+                        mask: canvasRenderer?.maskTexture
                     )
                 }
             } catch {

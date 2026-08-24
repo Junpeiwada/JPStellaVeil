@@ -46,6 +46,11 @@ struct JPStellaVeilApp: App {
             }
 
             applyDisplayOverridesIfSpecified(appState: appState)
+
+            // 動作確認用: 起動時に空マスクを生成する（Photoshop が立ち上がる）
+            if ProcessInfo.processInfo.environment["JPSTELLAVEIL_GENERATE_MASK"] == "1" {
+                appState.generateSkyMask()
+            }
         }
     }
 

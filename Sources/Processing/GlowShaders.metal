@@ -394,6 +394,9 @@ struct CompositeParams {
     uint layerCount;
     // 1 なら原画を含めず、グロー成分だけを合成する
     uint glowOnly;
+    // 空マスクを使うなら 1
+    uint hasMask;
+    uint padding;
 };
 
 /// レイヤー 1 枚分の合成パラメータ。Swift 側の CompositeLayerParams と一致させる。
@@ -414,7 +417,8 @@ struct CompositeLayerParams {
 kernel void compositeLayers(
     texture2d<float, access::read> original [[texture(0)]],
     texture2d<float, access::write> destination [[texture(1)]],
-    array<texture2d<float, access::read>, 8> glows [[texture(2)]],
+    texture2d<float, access::read> mask [[texture(2)]],
+    array<texture2d<float, access::read>, 8> glows [[texture(3)]],
     constant CompositeParams &params [[buffer(0)]],
     constant CompositeLayerParams *layers [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]]
@@ -425,12 +429,15 @@ kernel void compositeLayers(
 
     float3 color = params.glowOnly != 0 ? float3(0.0) : original.read(gid).rgb;
 
+    // 表示側の canvasFragment と同じ式にすること
+    float maskValue = params.hasMask != 0 ? mask.read(gid).r : 1.0;
+
     for (uint index = 0; index < params.layerCount; ++index) {
         if (layers[index].isVisible == 0) {
             continue;
         }
 
-        float3 glow = max(glows[index].read(gid).rgb * layers[index].gain, 0.0);
+        float3 glow = max(glows[index].read(gid).rgb * layers[index].gain * maskValue, 0.0);
 
         if (params.glowOnly != 0 || layers[index].blendMode != 0) {
             color += glow;

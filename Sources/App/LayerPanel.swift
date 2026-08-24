@@ -399,54 +399,122 @@ private struct LayerInspector: View {
                 }
 
                 InspectorSection("空マスク") {
-                    Toggle("自動空マスク", isOn: Binding(
-                        get: { layer.skyMask.isAutoEnabled },
-                        set: { newValue in
-                            appState.updateLayer(id: layer.id) { $0.skyMask.isAutoEnabled = newValue }
-                        }
-                    ))
+                    SkyMaskControls()
 
-                    HStack {
-                        Text("地平線")
-                            .font(.caption)
-                        Spacer()
-                        Text(layer.skyMask.horizonY.map { "\(Int(($0 * 100).rounded()))%" } ?? "自動")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+                    Divider()
 
-                    Slider(
-                        value: Binding(
-                            get: { layer.skyMask.horizonY ?? 0.5 },
+                    // 以下は未接続。マスクは Photoshop の「空を選択」で作っている
+                    Group {
+                        Toggle("自動空マスク", isOn: Binding(
+                            get: { layer.skyMask.isAutoEnabled },
                             set: { newValue in
-                                appState.updateLayer(id: layer.id) { $0.skyMask.horizonY = newValue }
+                                appState.updateLayer(id: layer.id) { $0.skyMask.isAutoEnabled = newValue }
                             }
-                        ),
-                        in: 0...1
-                    )
+                        ))
 
-                    if layer.skyMask.horizonY != nil {
-                        Button("自動に戻す") {
-                            appState.updateLayer(id: layer.id) { $0.skyMask.horizonY = nil }
+                        HStack {
+                            Text("地平線")
+                                .font(.caption)
+                            Spacer()
+                            Text(layer.skyMask.horizonY.map { "\(Int(($0 * 100).rounded()))%" } ?? "自動")
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.link)
-                        .font(.caption)
+
+                        Slider(
+                            value: Binding(
+                                get: { layer.skyMask.horizonY ?? 0.5 },
+                                set: { newValue in
+                                    appState.updateLayer(id: layer.id) { $0.skyMask.horizonY = newValue }
+                                }
+                            ),
+                            in: 0...1
+                        )
+
+                        ParameterSlider(
+                            title: "境界ぼかし",
+                            value: layer.skyMask.featherRadius,
+                            range: SkyMaskState.featherRadiusRange,
+                            defaultValue: 60,
+                            format: { "\(Int($0.rounded())) px" },
+                            onChange: { newValue in
+                                appState.updateLayer(id: layer.id) { $0.skyMask.featherRadius = newValue }
+                            }
+                        )
                     }
+                    .disabled(true)
 
-                    ParameterSlider(
-                        title: "境界ぼかし",
-                        value: layer.skyMask.featherRadius,
-                        range: SkyMaskState.featherRadiusRange,
-                        defaultValue: 60,
-                        format: { "\(Int($0.rounded())) px" },
-                        onChange: { newValue in
-                            appState.updateLayer(id: layer.id) { $0.skyMask.featherRadius = newValue }
-                        }
-                    )
+                    Text("地平線と境界ぼかしはまだ処理に繋がっていません")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(12)
+        }
+    }
+}
+
+/// 空マスクの生成と解除。
+///
+/// マスクの生成は Photoshop の「空を選択」に任せている。
+/// 自前で判定するより、星景写真（天の川 + 明るい前景）でも実用精度が出るため。
+private struct SkyMaskControls: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let reason = appState.skyMaskUnavailableReason {
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            } else if appState.isGeneratingSkyMask {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Photoshop で生成中…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let mask = appState.skyMask {
+                HStack {
+                    Label("生成済み", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+
+                    Spacer()
+
+                    Text("\(mask.width) x \(mask.height)")
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button("作り直す") {
+                        appState.generateSkyMask()
+                    }
+                    .controlSize(.small)
+
+                    Button("解除") {
+                        appState.clearSkyMask()
+                    }
+                    .controlSize(.small)
+                }
+            } else {
+                Button {
+                    appState.generateSkyMask()
+                } label: {
+                    Label("空マスクを作る", systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .disabled(!appState.canGenerateSkyMask)
+
+                Text("Photoshop の「空を選択」で前景を除外します")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
