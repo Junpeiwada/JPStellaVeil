@@ -30,5 +30,11 @@ struct JPStellaVeilApp: App {
         }
 
         appState.openTIFF(url: url)
+
+        // 動作確認用: 指定プリセットのレイヤーを起動時に追加する
+        if let presetName = ProcessInfo.processInfo.environment["JPSTELLAVEIL_ADD_PRESET"],
+           let preset = GlowPreset(rawValue: presetName) {
+            appState.addLayer(preset: preset)
+        }
     }
 }

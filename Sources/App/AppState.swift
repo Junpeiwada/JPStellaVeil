@@ -22,6 +22,12 @@ final class AppState: ObservableObject {
     /// レンダラ初期化に失敗した場合の理由。
     let canvasUnavailableReason: String?
 
+    /// インスペクタで編集中のレイヤー。
+    @Published var selectedLayerID: UUID?
+
+    /// プレビュー更新が要求された回数。Phase 4 でパイプライン起動の契機に使う。
+    @Published private(set) var previewUpdateGeneration: Int = 0
+
     private let tiffService: TIFFImageIOService
     private let metadataService: MetadataVerificationService
 
@@ -119,6 +125,93 @@ final class AppState: ObservableObject {
     var hasImage: Bool {
         canvasRenderer?.originalTexture != nil
     }
+
+    // MARK: - レイヤー操作
+
+    /// 選択中のレイヤー。
+    var selectedLayer: GlowLayer? {
+        guard let selectedLayerID else { return nil }
+        return project.layer(id: selectedLayerID)
+    }
+
+    /// プリセットからレイヤーを追加し、選択状態にする。
+    func addLayer(preset: GlowPreset) {
+        let layer = GlowLayer.makePreset(preset)
+        project.addLayer(layer)
+        selectedLayerID = layer.id
+        lastStatusMessage = "レイヤーを追加しました: \(layer.name)"
+        requestPreviewUpdate()
+    }
+
+    /// 選択中レイヤーを複製する。
+    func duplicateSelectedLayer() {
+        guard let selectedLayerID,
+              let newID = project.duplicateLayer(id: selectedLayerID) else {
+            return
+        }
+
+        self.selectedLayerID = newID
+        lastStatusMessage = "レイヤーを複製しました"
+        requestPreviewUpdate()
+    }
+
+    /// 指定レイヤーを削除する。
+    func removeLayer(id: UUID) {
+        let removedName = project.layer(id: id)?.name
+
+        guard project.removeLayer(id: id) else { return }
+
+        if selectedLayerID == id {
+            selectedLayerID = project.layers.last?.id
+        }
+
+        lastStatusMessage = removedName.map { "レイヤーを削除しました: \($0)" } ?? "レイヤーを削除しました"
+        requestPreviewUpdate()
+    }
+
+    /// 表示/非表示を切り替える。
+    func toggleLayerVisibility(id: UUID) {
+        guard project.toggleLayerVisibility(id: id) else { return }
+        requestPreviewUpdate()
+    }
+
+    /// レイヤーの並べ替え。
+    func moveLayers(fromOffsets source: IndexSet, toOffset destination: Int) {
+        project.moveLayers(fromOffsets: source, toOffset: destination)
+        requestPreviewUpdate()
+    }
+
+    /// レイヤーを名称変更する。
+    func renameLayer(id: UUID, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        project.updateLayer(id: id) { layer in
+            layer.name = trimmed
+        }
+    }
+
+    /// レイヤーのパラメータを更新する。値は有効範囲へ丸められる。
+    func updateLayer(id: UUID, transform: (inout GlowLayer) -> Void) {
+        guard project.updateLayer(id: id, transform: transform) else { return }
+        requestPreviewUpdate()
+    }
+
+    /// 選択中レイヤーのパラメータを更新する。
+    func updateSelectedLayer(transform: (inout GlowLayer) -> Void) {
+        guard let selectedLayerID else { return }
+        updateLayer(id: selectedLayerID, transform: transform)
+    }
+
+    /// プレビュー再計算の要求。
+    ///
+    /// Phase 4 で画像処理パイプラインに接続する。
+    /// 現時点ではレイヤー構成の変更を記録するだけ。
+    private func requestPreviewUpdate() {
+        previewUpdateGeneration += 1
+    }
+
+
 
     func exportIntermediateToTemporary() {
         guard let inputPath = project.inputImage?.filePath else {

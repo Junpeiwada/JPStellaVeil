@@ -15,7 +15,13 @@ struct ContentView: View {
 
                 Divider()
 
-                CanvasContainer()
+                HStack(spacing: 0) {
+                    CanvasContainer()
+
+                    Divider()
+
+                    LayerPanel()
+                }
 
                 Divider()
 
