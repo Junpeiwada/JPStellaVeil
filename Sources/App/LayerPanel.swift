@@ -385,7 +385,7 @@ private struct LayerInspector: View {
 
                     if let histogram = appState.starHistogram, histogram.totalSamples > 0 {
                         HStack {
-                            Text("グロー対象")
+                            Text("拾う星の量")
                             Spacer()
                             Text(String(
                                 format: "%.2f%%",

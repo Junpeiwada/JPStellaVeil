@@ -109,9 +109,24 @@ kernel void blurHorizontalFromImage(
     destination.write(float4(sum, 1.0), gid);
 }
 
+/// 成分ごとの明るさしきい値を適用する。
+///
+/// しきい値を「引く」と振幅まで落ちてしまい、明るい星の裾が痩せる。
+/// そこで引き算ではなく、しきい値付近で滑らかに立ち上がるゲートを掛ける。
+/// しきい値を十分超えた星は元の明るさのまま裾が乗り、
+/// 届かない星にはその成分が乗らない。
+static inline float3 applyBrightnessGate(float3 value, float threshold) {
+    if (threshold <= 0.0) {
+        return value;
+    }
+
+    float3 gate = smoothstep(float3(threshold), float3(threshold * 1.5), value);
+    return value * gate;
+}
+
 /// 星成分を横方向にぼかす（PSF 成分の 1 パス目）。
 ///
-/// 読み込み時に成分ごとの明るさしきい値を引く。
+/// 読み込み時に成分ごとの明るさしきい値を適用する。
 /// 広い成分ほど高いしきい値なので、暗い星は芯だけ、明るい星は裾まで乗る。
 /// これにより PSF の形自体が星の明るさで変わる。
 kernel void blurHorizontal(
@@ -127,12 +142,12 @@ kernel void blurHorizontal(
 
     int2 center = int2(gid);
     float threshold = params.componentThreshold;
-    float3 sum = max(source.read(gid).rgb - threshold, 0.0) * weights[0];
+    float3 sum = applyBrightnessGate(source.read(gid).rgb, threshold) * weights[0];
 
     for (int k = 1; k <= params.radius; ++k) {
         float w = weights[k];
-        sum += max(source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb - threshold, 0.0) * w;
-        sum += max(source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb - threshold, 0.0) * w;
+        sum += applyBrightnessGate(source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb, threshold) * w;
+        sum += applyBrightnessGate(source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb, threshold) * w;
     }
 
     destination.write(float4(sum, 1.0), gid);
