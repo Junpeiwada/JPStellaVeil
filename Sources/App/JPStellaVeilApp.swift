@@ -4,6 +4,10 @@ import SwiftUI
 struct JPStellaVeilApp: App {
     @StateObject private var appState = AppState()
 
+    /// 起動オプションを適用したか。
+    /// onAppear は複数回呼ばれることがあり、そのままだとレイヤーが二重に追加される。
+    @State private var hasAppliedLaunchOptions = false
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -11,6 +15,8 @@ struct JPStellaVeilApp: App {
                 .environmentObject(appState.canvasDisplay)
                 .frame(minWidth: 1100, minHeight: 700)
                 .onAppear {
+                    guard !hasAppliedLaunchOptions else { return }
+                    hasAppliedLaunchOptions = true
                     openInitialFileIfSpecified()
                 }
         }
