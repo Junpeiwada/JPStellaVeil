@@ -1,5 +1,7 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
+import Metal
 
 final class AppState: ObservableObject {
     @Published var project: StellaVeilProject
@@ -11,6 +13,15 @@ final class AppState: ObservableObject {
     /// 直近のメタデータ検証結果。
     @Published var lastMetadataVerification: MetadataVerificationResult?
 
+    /// キャンバスの表示状態（倍率、パン、比較、マスク表示）。
+    @Published var canvasViewState = CanvasViewState()
+
+    /// キャンバス描画の担当。Metal が使えない環境では nil。
+    let canvasRenderer: CanvasRenderer?
+
+    /// レンダラ初期化に失敗した場合の理由。
+    let canvasUnavailableReason: String?
+
     private let tiffService: TIFFImageIOService
     private let metadataService: MetadataVerificationService
 
@@ -21,6 +32,15 @@ final class AppState: ObservableObject {
         self.project = project
         self.tiffService = TIFFImageIOService()
         self.metadataService = metadataService
+
+        do {
+            let renderer = try CanvasRenderer()
+            self.canvasRenderer = renderer
+            self.canvasUnavailableReason = nil
+        } catch {
+            self.canvasRenderer = nil
+            self.canvasUnavailableReason = error.localizedDescription
+        }
     }
 
     /// ExifTool が利用可能か。UI のボタン活性判定に使う。
@@ -55,10 +75,49 @@ final class AppState: ObservableObject {
                     totalTagCount: ledger.totalTagCount
                 )
             )
-            lastStatusMessage = "Loaded: \(url.lastPathComponent)"
+            try loadCanvasTexture(at: url)
+
+            lastStatusMessage = "読み込み完了: \(url.lastPathComponent)（\(properties.width) x \(properties.height)）"
         } catch {
             lastStatusMessage = error.localizedDescription
         }
+    }
+
+    /// 入力画像をキャンバス表示用テクスチャへ読み込む。
+    private func loadCanvasTexture(at url: URL) throws {
+        guard let renderer = canvasRenderer else {
+            return
+        }
+
+        let image = try tiffService.loadImage(at: url)
+        let loader = MetalTextureLoader(device: renderer.device)
+        let texture = try loader.makeLinearTexture(from: image)
+
+        renderer.setOriginalTexture(texture)
+
+        // 新しい画像を開いたら表示状態を初期化する
+        canvasViewState = CanvasViewState()
+        renderer.viewState = canvasViewState
+    }
+
+    /// 表示倍率を変更する。
+    func setZoomMode(_ mode: CanvasZoomMode) {
+        canvasViewState.setZoomMode(mode)
+    }
+
+    /// マスクオーバーレイ表示を切り替える。
+    func toggleMaskOverlay() {
+        canvasViewState.isMaskOverlayVisible.toggle()
+    }
+
+    /// スプリット比較の境界を初期状態（全面が処理結果）へ戻す。
+    func resetSplitComparison() {
+        canvasViewState.splitPosition = 1.0
+    }
+
+    /// 画像が読み込まれているか。
+    var hasImage: Bool {
+        canvasRenderer?.originalTexture != nil
     }
 
     func exportIntermediateToTemporary() {
