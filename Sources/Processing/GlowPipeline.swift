@@ -90,16 +90,6 @@ struct GlowStarHistogram: Equatable {
         return Double(count) / Double(totalSamples)
     }
 
-    /// 表示用に正規化した各ビンの高さ（0〜1）。
-    ///
-    /// 画素数の差が桁違いなので対数で潰す。
-    var normalizedHeights: [Double] {
-        let maximum = bins.dropFirst().max() ?? 0
-        guard maximum > 0 else { return bins.map { _ in 0 } }
-
-        let scale = log(Double(maximum) + 1)
-        return bins.map { log(Double($0) + 1) / scale }
-    }
 }
 
 /// シェーダの CompositeParams と一致させる構造体。

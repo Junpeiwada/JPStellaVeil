@@ -314,26 +314,6 @@ final class GlowProcessingPlanTests: XCTestCase {
         XCTAssertEqual(histogram.fraction(atOrAbove: 1.0), 0.005, accuracy: 1e-9)
     }
 
-    func testHistogramNormalizedHeightsIgnoreDarkBin() {
-        // ビン 0（真っ暗な空）は桁違いに多いので、正規化の基準から外す
-        let histogram = GlowStarHistogram(
-            bins: [1_000_000, 100, 10, 1],
-            minimumValue: 0.001,
-            totalSamples: 1_000_111
-        )
-
-        let heights = histogram.normalizedHeights
-        XCTAssertEqual(heights.count, 4)
-
-        // 最大のビン（ビン 1）が 1.0 になる
-        XCTAssertEqual(heights[1], 1.0, accuracy: 1e-9)
-        XCTAssertGreaterThan(heights[2], 0)
-        XCTAssertLessThan(heights[2], heights[1])
-
-        // ビン 0 は基準から外れるので 1.0 を超える
-        XCTAssertGreaterThan(heights[0], 1.0)
-    }
-
     // MARK: - 処理状態
 
     func testProcessingStateProgress() {

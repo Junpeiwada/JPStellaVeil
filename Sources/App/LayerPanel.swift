@@ -384,10 +384,17 @@ private struct LayerInspector: View {
                     )
 
                     if let histogram = appState.starHistogram, histogram.totalSamples > 0 {
-                        StarHistogramView(
-                            histogram: histogram,
-                            threshold: layer.extraction.brightnessFloor
-                        )
+                        HStack {
+                            Text("グロー対象")
+                            Spacer()
+                            Text(String(
+                                format: "%.2f%%",
+                                histogram.fraction(atOrAbove: layer.extraction.brightnessFloor) * 100
+                            ))
+                            .monospacedDigit()
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     }
                 }
 
@@ -441,87 +448,6 @@ private struct LayerInspector: View {
             }
             .padding(12)
         }
-    }
-}
-
-/// 星の明るさ分布と、現在の明るさ下限の位置を示すミニグラフ。
-///
-/// どこで切ればどれだけの星が残るかを見ながら調整するためのもの。
-private struct StarHistogramView: View {
-    let histogram: GlowStarHistogram
-    let threshold: Double
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Canvas { context, size in
-                draw(context: context, size: size)
-            }
-            .frame(height: 40)
-            .background(Color.primary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-
-            HStack {
-                Text("暗い")
-                Spacer()
-                Text(remainingText)
-                    .monospacedDigit()
-                Spacer()
-                Text("明るい")
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private func draw(context: GraphicsContext, size: CGSize) {
-        let heights = histogram.normalizedHeights
-        guard heights.count > 2, size.width > 0 else { return }
-
-        // ビン 0 は「ほぼ真っ暗な空」で桁違いに多いため描かない
-        let bars = Array(heights.dropFirst())
-        let barWidth = size.width / CGFloat(bars.count)
-
-        for (index, height) in bars.enumerated() {
-            let barHeight = max(1, size.height * CGFloat(height))
-            let rect = CGRect(
-                x: CGFloat(index) * barWidth,
-                y: size.height - barHeight,
-                width: max(1, barWidth - 0.5),
-                height: barHeight
-            )
-
-            // しきい値より右（明るい側）が実際にグローの対象になる
-            let isActive = histogram.value(forBin: index + 1) >= threshold
-            context.fill(
-                Path(rect),
-                with: .color(isActive ? .accentColor.opacity(0.85) : .secondary.opacity(0.35))
-            )
-        }
-
-        var marker = Path()
-        let x = markerX(width: size.width)
-        marker.move(to: CGPoint(x: x, y: 0))
-        marker.addLine(to: CGPoint(x: x, y: size.height))
-        context.stroke(marker, with: .color(.orange), lineWidth: 1.5)
-    }
-
-    /// 明るさ下限に対応する横位置。ビンと同じ対数目盛り。
-    private func markerX(width: CGFloat) -> CGFloat {
-        guard threshold > histogram.minimumValue else { return 0 }
-
-        let span = log(1.0 / histogram.minimumValue)
-        let position = log(threshold / histogram.minimumValue) / span
-        return CGFloat(min(1.0, max(0.0, position))) * width
-    }
-
-    private var remainingText: String {
-        let percent = histogram.fraction(atOrAbove: threshold) * 100
-
-        if percent >= 1 {
-            return String(format: "グロー対象 %.1f%%", percent)
-        }
-
-        return String(format: "グロー対象 %.2f%%", percent)
     }
 }
 
