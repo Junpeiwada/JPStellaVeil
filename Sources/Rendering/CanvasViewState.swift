@@ -102,6 +102,35 @@ struct CanvasViewState: Equatable {
         return CGRect(x: originX, y: originY, width: drawWidth, height: drawHeight)
     }
 
+    /// 画面座標から画像のテクスチャ座標への変換係数。
+    ///
+    /// 画面座標は左上原点の 0〜1、テクスチャ座標も左上原点の 0〜1。
+    /// `uv = screenCoord * scale + offset` で変換する。
+    ///
+    /// 拡大縮小をビューポートで表現すると、等倍以上でビューポート幅が
+    /// Metal の上限（16384）を超えて描画が破綻する。そのためテクスチャ座標側で表現する。
+    func textureMapping(imageSize: CGSize, viewSize: CGSize) -> (scale: CGSize, offset: CGSize) {
+        let rect = imageRect(imageSize: imageSize, viewSize: viewSize)
+
+        guard rect.width > 0, rect.height > 0, viewSize.width > 0, viewSize.height > 0 else {
+            return (CGSize(width: 1, height: 1), .zero)
+        }
+
+        // imageRect は左下原点なので、上端までの距離へ直す
+        let topEdge = viewSize.height - rect.maxY
+
+        return (
+            scale: CGSize(
+                width: viewSize.width / rect.width,
+                height: viewSize.height / rect.height
+            ),
+            offset: CGSize(
+                width: -rect.origin.x / rect.width,
+                height: -topEdge / rect.height
+            )
+        )
+    }
+
     /// パン量を「画像が画面外へ飛んでいかない」範囲へ収める。
     ///
     /// 画像が画面より小さい軸では中央固定（可動域 0）にする。

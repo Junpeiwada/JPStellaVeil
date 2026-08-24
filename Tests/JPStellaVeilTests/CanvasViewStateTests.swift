@@ -140,6 +140,90 @@ final class CanvasViewStateTests: XCTestCase {
         XCTAssertEqual(state.splitPosition, 0.0)
     }
 
+    // MARK: - テクスチャ座標への変換
+
+    /// 画面中央が画像中央を指すこと（パンなしの場合）。
+    func testTextureMappingCentersImageWithoutPan() {
+        var state = CanvasViewState()
+        state.setZoomMode(.actualSize)
+
+        let imageSize = CGSize(width: 8640, height: 4860)
+        let viewSize = CGSize(width: 1000, height: 700)
+        let mapping = state.textureMapping(imageSize: imageSize, viewSize: viewSize)
+
+        let centerU = 0.5 * mapping.scale.width + mapping.offset.width
+        let centerV = 0.5 * mapping.scale.height + mapping.offset.height
+
+        XCTAssertEqual(centerU, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(centerV, 0.5, accuracy: 1e-9)
+    }
+
+    /// どの倍率でもアスペクト比が保たれること。
+    ///
+    /// 拡大縮小をビューポートで表現していたときは、等倍以上で
+    /// ビューポート幅が Metal の上限を超えて描画が破綻していた。
+    func testTextureMappingKeepsAspectRatioAtAnyZoom() {
+        let imageSize = CGSize(width: 8640, height: 4860)
+        let viewSize = CGSize(width: 1000, height: 700)
+
+        for mode in [CanvasZoomMode.fit, .actualSize, .custom(2.0), .custom(8.0), .custom(0.1)] {
+            var state = CanvasViewState()
+            state.setZoomMode(mode)
+
+            let mapping = state.textureMapping(imageSize: imageSize, viewSize: viewSize)
+
+            // 画面 1 ポイントあたりのテクスチャ移動量は、縦横で
+            // 画像の縦横比ぶんだけ違う。これが崩れると画像が伸びて見える。
+            let horizontalPerPoint = mapping.scale.width / viewSize.width
+            let verticalPerPoint = mapping.scale.height / viewSize.height
+            let ratio = (horizontalPerPoint / verticalPerPoint) * (imageSize.width / imageSize.height)
+
+            XCTAssertEqual(ratio, 1.0, accuracy: 1e-9, "倍率 \(mode.label) でアスペクト比が崩れている")
+        }
+    }
+
+    /// パンすると表示位置がずれ、可動域を超えないこと。
+    func testTextureMappingShiftsWithPan() {
+        let imageSize = CGSize(width: 8640, height: 4860)
+        let viewSize = CGSize(width: 1000, height: 700)
+
+        var state = CanvasViewState()
+        state.setZoomMode(.actualSize)
+        let before = state.textureMapping(imageSize: imageSize, viewSize: viewSize)
+
+        state.applyPan(translation: CGSize(width: 100, height: 0), imageSize: imageSize, viewSize: viewSize)
+        let after = state.textureMapping(imageSize: imageSize, viewSize: viewSize)
+
+        XCTAssertNotEqual(before.offset.width, after.offset.width)
+        XCTAssertEqual(before.scale.width, after.scale.width, accuracy: 1e-9, "パンで倍率が変わっている")
+        XCTAssertEqual(before.scale.height, after.scale.height, accuracy: 1e-9)
+
+        // 画面 100 ポイント動かしたぶんだけテクスチャ座標がずれる
+        let expectedShift = 100.0 / imageSize.width
+        XCTAssertEqual(after.offset.width - before.offset.width, -expectedShift, accuracy: 1e-9)
+    }
+
+    /// Fit 表示では画像全体が画面内に収まること。
+    func testTextureMappingFitsWholeImage() {
+        let imageSize = CGSize(width: 8640, height: 4860)
+        let viewSize = CGSize(width: 1000, height: 700)
+
+        var state = CanvasViewState()
+        state.setZoomMode(.fit)
+        let mapping = state.textureMapping(imageSize: imageSize, viewSize: viewSize)
+
+        // 画面の左上と右下に対応するテクスチャ座標が [0, 1] を含む
+        let topLeftU = 0.0 * mapping.scale.width + mapping.offset.width
+        let bottomRightU = 1.0 * mapping.scale.width + mapping.offset.width
+        let topLeftV = 0.0 * mapping.scale.height + mapping.offset.height
+        let bottomRightV = 1.0 * mapping.scale.height + mapping.offset.height
+
+        XCTAssertLessThanOrEqual(topLeftU, 0.0 + 1e-9)
+        XCTAssertGreaterThanOrEqual(bottomRightU, 1.0 - 1e-9)
+        XCTAssertLessThanOrEqual(topLeftV, 0.0 + 1e-9)
+        XCTAssertGreaterThanOrEqual(bottomRightV, 1.0 - 1e-9)
+    }
+
     func testZoomModeLabels() {
         XCTAssertEqual(CanvasZoomMode.fit.label, "Fit")
         XCTAssertEqual(CanvasZoomMode.actualSize.label, "100%")

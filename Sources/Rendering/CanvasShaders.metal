@@ -4,6 +4,13 @@ using namespace metal;
 /// キャンバス表示用のパラメータ。
 /// Swift 側の CanvasUniforms と レイアウトを一致させる。
 struct CanvasUniforms {
+    // 画面座標（0〜1）からテクスチャ座標へ変換する係数。
+    // 拡大縮小とパンはここで表現する。
+    // ビューポートで表現すると、等倍以上でビューポートが Metal の上限（16384）を
+    // 超えて描画が破綻するため、この方式にしている。
+    float2 uvScale;
+    float2 uvOffset;
+
     // 表示専用の露出倍率（書き出しには影響しない）
     float exposure;
 
@@ -42,7 +49,9 @@ struct CanvasLayerUniform {
 
 struct VertexOut {
     float4 position [[position]];
-    float2 texCoord;
+
+    // 描画領域全体を 0〜1 で表す画面座標（左上が原点）
+    float2 screenCoord;
 };
 
 /// 画面全体を覆う三角形ストリップ。頂点バッファ不要。
@@ -65,7 +74,7 @@ vertex VertexOut canvasVertex(uint vertexID [[vertex_id]]) {
 
     VertexOut out;
     out.position = float4(positions[vertexID], 0.0, 1.0);
-    out.texCoord = texCoords[vertexID];
+    out.screenCoord = texCoords[vertexID];
     return out;
 }
 
@@ -103,7 +112,15 @@ fragment float4 canvasFragment(
         address::clamp_to_edge
     );
 
-    float3 original = originalTexture.sample(textureSampler, in.texCoord).rgb;
+    // 画面座標から画像のテクスチャ座標へ変換する
+    float2 uv = in.screenCoord * uniforms.uvScale + uniforms.uvOffset;
+
+    // 画像の外側は背景色で塗る（キャンバスのクリア色と合わせる）
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return float4(0.08, 0.08, 0.09, 1.0);
+    }
+
+    float3 original = originalTexture.sample(textureSampler, uv).rgb;
 
     // レイヤー別に保持してあるグローをここで合成する。
     // 畳み込みの後段は線形なので、強度・不透明度・合成モード・表示切替は
@@ -116,7 +133,7 @@ fragment float4 canvasFragment(
             continue;
         }
 
-        float3 glow = max(glowTextures[index].sample(textureSampler, in.texCoord).rgb * layers[index].gain, 0.0);
+        float3 glow = max(glowTextures[index].sample(textureSampler, uv).rgb * layers[index].gain, 0.0);
 
         if (uniforms.glowOnly != 0 || layers[index].blendMode != 0) {
             processed += glow;
@@ -130,7 +147,7 @@ fragment float4 canvasFragment(
     float3 color;
     if (uniforms.showOriginal != 0) {
         color = original;
-    } else if (in.texCoord.x > uniforms.splitPosition) {
+    } else if (in.screenCoord.x > uniforms.splitPosition) {
         color = processed;
     } else {
         color = original;
@@ -143,14 +160,14 @@ fragment float4 canvasFragment(
 
     // マスクオーバーレイ: 適用領域を緑の半透明で示す
     if (uniforms.hasMask != 0 && uniforms.maskOverlayOpacity > 0.0) {
-        float mask = maskTexture.sample(textureSampler, in.texCoord).r;
+        float mask = maskTexture.sample(textureSampler, uv).r;
         float3 overlayColor = float3(0.0, 1.0, 0.35);
         displayColor = mix(displayColor, overlayColor, mask * uniforms.maskOverlayOpacity);
     }
 
     // スプリット比較の境界線を描く
     if (uniforms.showOriginal == 0 && uniforms.splitPosition > 0.0001 && uniforms.splitPosition < 0.9999) {
-        float distanceToSplit = abs(in.texCoord.x - uniforms.splitPosition);
+        float distanceToSplit = abs(in.screenCoord.x - uniforms.splitPosition);
         float lineWidth = 0.0015;
         if (distanceToSplit < lineWidth) {
             displayColor = float3(1.0, 0.85, 0.2);

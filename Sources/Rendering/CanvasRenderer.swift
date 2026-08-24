@@ -5,6 +5,8 @@ import simd
 
 /// シェーダの CanvasUniforms とレイアウトを一致させる構造体。
 struct CanvasUniforms {
+    var uvScale: SIMD2<Float>
+    var uvOffset: SIMD2<Float>
     var exposure: Float
     var maskOverlayOpacity: Float
     var splitPosition: Float
@@ -150,20 +152,24 @@ final class CanvasRenderer: NSObject {
             height: viewSize.height / scaleFactor
         )
 
-        let rect = viewState.imageRect(imageSize: imageSize, viewSize: logicalViewSize)
-
-        // ビューポートを画像の描画矩形に合わせる。
-        // シェーダは全面描画のままにして、拡大縮小と位置はビューポートで表現する。
+        // ビューポートは描画領域全体に固定する。
+        // 等倍以上ではビューポート幅が Metal の上限（16384）を超えて描画が破綻するため、
+        // 拡大縮小とパンはテクスチャ座標側で表現する。
         encoder.setViewport(
             MTLViewport(
-                originX: Double(rect.origin.x * scaleFactor),
-                originY: Double(rect.origin.y * scaleFactor),
-                width: Double(rect.width * scaleFactor),
-                height: Double(rect.height * scaleFactor),
+                originX: 0.0,
+                originY: 0.0,
+                width: Double(viewSize.width),
+                height: Double(viewSize.height),
                 znear: 0.0,
                 zfar: 1.0
             )
         )
+
+        // 画面座標（左上原点、0〜1）から画像のテクスチャ座標への変換係数
+        let mapping = viewState.textureMapping(imageSize: imageSize, viewSize: logicalViewSize)
+        let uvScale = SIMD2<Float>(Float(mapping.scale.width), Float(mapping.scale.height))
+        let uvOffset = SIMD2<Float>(Float(mapping.offset.width), Float(mapping.offset.height))
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setFragmentTexture(original, index: 0)
@@ -180,6 +186,8 @@ final class CanvasRenderer: NSObject {
         let layerCount = min(glowTextures.count, layerUniforms.count, slotCount)
 
         var uniforms = CanvasUniforms(
+            uvScale: uvScale,
+            uvOffset: uvOffset,
             exposure: Float(viewState.displayExposure),
             maskOverlayOpacity: viewState.isMaskOverlayVisible ? 0.45 : 0.0,
             splitPosition: Float(viewState.splitPosition),

@@ -45,7 +45,8 @@ struct ApplyBar: View {
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // 表示内容によって高さが変わると下端の位置が動いてしまうので固定する
+        .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)
     }
 
     /// 処理中の表示（進捗と中止）。
