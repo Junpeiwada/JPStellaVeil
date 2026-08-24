@@ -136,7 +136,8 @@ final class CanvasViewStateTests: XCTestCase {
         XCTAssertFalse(state.isShowingOriginal)
         XCTAssertFalse(state.isMaskOverlayVisible)
         // スプリット境界の既定は全面が処理結果
-        XCTAssertEqual(state.splitPosition, 1.0)
+        // （シェーダは境界より右を処理結果として描くので 0.0 が全面適用にあたる）
+        XCTAssertEqual(state.splitPosition, 0.0)
     }
 
     func testZoomModeLabels() {

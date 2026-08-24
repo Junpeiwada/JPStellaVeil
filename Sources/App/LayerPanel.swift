@@ -20,8 +20,97 @@ struct LayerPanel: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
+            Divider()
+
+            ApplyBar()
         }
-        .frame(minWidth: 280, idealWidth: 300)
+        .frame(minWidth: 280, idealWidth: 320)
+    }
+}
+
+// MARK: - 適用バー
+
+/// フル解像度処理の起動、進捗、中止をまとめた領域。
+///
+/// スライダー操作では処理を走らせない。処理はここで明示的に開始する。
+private struct ApplyBar: View {
+    @EnvironmentObject private var appState: AppState
+
+    private var hasLayers: Bool {
+        !appState.project.visibleLayers.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let progress = appState.processingState.progress {
+                progressContent(progress)
+            } else {
+                applyContent
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 処理中の表示（進捗と中止）。
+    private func progressContent(_ progress: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(tileProgressText)
+                    .font(.caption)
+                    .monospacedDigit()
+
+                Spacer()
+
+                Button("中止") {
+                    appState.cancelGlow()
+                }
+                .controlSize(.small)
+            }
+
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+
+            Text("焼き上がったタイルから順に表示されます")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 待機中の表示（未適用バッジと適用ボタン）。
+    private var applyContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if appState.hasUnappliedChanges, hasLayers {
+                Label("未適用の変更があります", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            Button {
+                appState.applyGlow()
+            } label: {
+                Text(hasLayers ? "適用" : "原画に戻す")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!appState.canApplyGlow)
+
+            Text("フル解像度で処理します。処理中も表示操作は続けられます")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var tileProgressText: String {
+        guard case .running(let completed, let total) = appState.processingState else {
+            return "処理中"
+        }
+
+        let percent = total > 0 ? Int((Double(completed) / Double(total) * 100).rounded()) : 0
+        return "処理中 \(percent)%（\(completed)/\(total) タイル）"
     }
 }
 

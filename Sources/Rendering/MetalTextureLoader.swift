@@ -6,6 +6,9 @@ enum MetalTextureLoaderError: LocalizedError {
     case cannotCreateContext
     case cannotCreateTexture
     case imageTooLarge(width: Int, height: Int, maxDimension: Int)
+    case textureNotReadable
+    case unsupportedPixelFormat
+    case cannotCreateImage
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +18,12 @@ enum MetalTextureLoaderError: LocalizedError {
             return "Metal テクスチャを作成できません。"
         case .imageTooLarge(let width, let height, let maxDimension):
             return "画像が大きすぎます（\(width)x\(height)、上限 \(maxDimension)px）。"
+        case .textureNotReadable:
+            return "処理結果テクスチャを CPU から読み出せません。"
+        case .unsupportedPixelFormat:
+            return "対応していないピクセル形式です。"
+        case .cannotCreateImage:
+            return "処理結果から画像を作成できません。"
         }
     }
 }
@@ -131,6 +140,68 @@ struct MetalTextureLoader {
         }
 
         return texture
+    }
+
+    /// テクスチャを 16bit リニア RGB の CGImage として取り出す。
+    ///
+    /// 処理結果をそのまま TIFF 書き出しへ渡すために使う。
+    /// プレビューと書き出しで同じ画素を使うので、両者の見え方は原理的に一致する。
+    func makeLinearCGImage(from texture: MTLTexture) throws -> CGImage {
+        guard texture.pixelFormat == .rgba16Unorm else {
+            throw MetalTextureLoaderError.unsupportedPixelFormat
+        }
+
+        // .private のテクスチャは CPU から読めない
+        guard texture.storageMode != .private else {
+            throw MetalTextureLoaderError.textureNotReadable
+        }
+
+        guard let linearColorSpace = CGColorSpace(name: CGColorSpace.linearSRGB) else {
+            throw MetalTextureLoaderError.cannotCreateContext
+        }
+
+        let width = texture.width
+        let height = texture.height
+        let bytesPerPixel = 8
+        let bytesPerRow = width * bytesPerPixel
+
+        var pixelBuffer = [UInt16](repeating: 0, count: width * height * 4)
+        pixelBuffer.withUnsafeMutableBytes { rawBuffer in
+            texture.getBytes(
+                rawBuffer.baseAddress!,
+                bytesPerRow: bytesPerRow,
+                from: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0
+            )
+        }
+
+        let data = pixelBuffer.withUnsafeBytes { Data($0) }
+
+        guard let provider = CGDataProvider(data: data as CFData) else {
+            throw MetalTextureLoaderError.cannotCreateImage
+        }
+
+        // 取り込み時と同じ並び（リトルエンディアン 16bit、RGBA 順）
+        let bitmapInfo = CGBitmapInfo.byteOrder16Little
+            .union(.init(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue))
+
+        guard let image = CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 16,
+            bitsPerPixel: 64,
+            bytesPerRow: bytesPerRow,
+            space: linearColorSpace,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else {
+            throw MetalTextureLoaderError.cannotCreateImage
+        }
+
+        return image
     }
 }
 

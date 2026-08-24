@@ -25,8 +25,17 @@ final class AppState: ObservableObject {
     /// インスペクタで編集中のレイヤー。
     @Published var selectedLayerID: UUID?
 
-    /// プレビュー更新が要求された回数。Phase 4 でパイプライン起動の契機に使う。
+    /// プレビュー更新が要求された回数。「適用」の要否判定に使う。
     @Published private(set) var previewUpdateGeneration: Int = 0
+
+    /// 最後に適用が完了したパラメータ世代。
+    @Published private(set) var lastAppliedGeneration: Int = 0
+
+    /// グロー処理の進み具合。
+    @Published private(set) var processingState: GlowProcessingState = .idle
+
+    /// 画像処理の実行管理。Metal が使えない環境では nil。
+    private var processingController: GlowProcessingController?
 
     private let tiffService: TIFFImageIOService
     private let metadataService: MetadataVerificationService
@@ -46,6 +55,30 @@ final class AppState: ObservableObject {
         } catch {
             self.canvasRenderer = nil
             self.canvasUnavailableReason = error.localizedDescription
+        }
+
+        setUpProcessingController()
+    }
+
+    /// グロー処理のコントローラを用意し、通知をこの AppState へ配線する。
+    private func setUpProcessingController() {
+        guard let renderer = canvasRenderer else { return }
+
+        do {
+            let controller = try GlowProcessingController(device: renderer.device)
+
+            controller.onStateChange = { [weak self] state in
+                self?.handleProcessingState(state)
+            }
+
+            controller.onProcessedTextureChange = { [weak self] texture in
+                self?.canvasRenderer?.processedTexture = texture
+            }
+
+            processingController = controller
+        } catch {
+            processingController = nil
+            lastStatusMessage = error.localizedDescription
         }
     }
 
@@ -101,9 +134,13 @@ final class AppState: ObservableObject {
 
         renderer.setOriginalTexture(texture)
 
-        // 新しい画像を開いたら表示状態を初期化する
+        // 新しい画像を開いたら表示状態と処理結果を初期化する
         canvasViewState = CanvasViewState()
         renderer.viewState = canvasViewState
+        processingController?.reset()
+
+        // レイヤーが残っている場合は未適用状態として扱う
+        requestPreviewUpdate()
     }
 
     /// 表示倍率を変更する。
@@ -118,7 +155,7 @@ final class AppState: ObservableObject {
 
     /// スプリット比較の境界を初期状態（全面が処理結果）へ戻す。
     func resetSplitComparison() {
-        canvasViewState.splitPosition = 1.0
+        canvasViewState.splitPosition = 0.0
     }
 
     /// 画像が読み込まれているか。
@@ -205,10 +242,70 @@ final class AppState: ObservableObject {
 
     /// プレビュー再計算の要求。
     ///
-    /// Phase 4 で画像処理パイプラインに接続する。
-    /// 現時点ではレイヤー構成の変更を記録するだけ。
+    /// ここでは処理を開始しない。フル解像度処理は「適用」ボタンでのみ走る。
     private func requestPreviewUpdate() {
         previewUpdateGeneration += 1
+    }
+
+    // MARK: - グロー処理
+
+    /// 適用されていないパラメータ変更があるか。
+    var hasUnappliedChanges: Bool {
+        previewUpdateGeneration != lastAppliedGeneration
+    }
+
+    /// 適用できる状態か（画像とレイヤーが揃っていて処理中でない）。
+    var canApplyGlow: Bool {
+        hasImage && processingController != nil && !processingState.isRunning
+    }
+
+    /// フル解像度のグロー処理を開始する。
+    ///
+    /// 縮小プレビューは作らない。処理は必ず入力と同じ解像度で行い、
+    /// プレビューと書き出しの見え方を一致させる。
+    func applyGlow() {
+        guard let controller = processingController,
+              let original = canvasRenderer?.originalTexture else {
+            lastStatusMessage = "画像が読み込まれていません"
+            return
+        }
+
+        let generation = previewUpdateGeneration
+        let layers = project.visibleLayers
+
+        lastStatusMessage = layers.isEmpty
+            ? "レイヤーが無いため原画を表示します"
+            : "処理を開始しました（\(layers.count) レイヤー）"
+
+        controller.start(original: original, layers: layers, generation: generation)
+    }
+
+    /// 実行中の処理を中止する。
+    func cancelGlow() {
+        guard processingState.isRunning else { return }
+
+        processingController?.cancel()
+        processingState = .cancelled
+        lastStatusMessage = "処理を中止しました"
+    }
+
+    private func handleProcessingState(_ state: GlowProcessingState) {
+        // 置き換えられた古いジョブの通知はコントローラ側で捨てられている
+        processingState = state
+
+        switch state {
+        case .finished(let generation, let duration):
+            lastAppliedGeneration = generation
+            lastStatusMessage = duration > 0
+                ? String(format: "適用しました（%.1f 秒）", duration)
+                : "レイヤーが無いため原画を表示しています"
+        case .cancelled:
+            lastStatusMessage = "処理を中止しました"
+        case .failed(let message):
+            lastStatusMessage = message
+        case .idle, .running:
+            break
+        }
     }
 
 
@@ -269,8 +366,28 @@ final class AppState: ObservableObject {
 
         let inputURL = URL(fileURLWithPath: inputPath)
 
+        // 処理結果をそのまま書き出す。プレビューと同じ画素なので見え方は一致する。
+        var processedImage: CGImage?
+        if !project.visibleLayers.isEmpty {
+            guard !hasUnappliedChanges else {
+                lastStatusMessage = "未適用の変更があります。先に「適用」を実行してください"
+                return
+            }
+
+            do {
+                processedImage = try processingController?.currentProcessedImage()
+            } catch {
+                lastStatusMessage = "処理結果を取り出せませんでした: \(error.localizedDescription)"
+                return
+            }
+        }
+
         do {
-            let validation = try tiffService.exportFinalTIFF(from: inputURL, to: outputURL)
+            let validation = try tiffService.exportFinalTIFF(
+                from: inputURL,
+                processedLinearImage: processedImage,
+                to: outputURL
+            )
             lastValidationFailureReasons = validation.failureReasons
 
             guard validation.isCompatible else {

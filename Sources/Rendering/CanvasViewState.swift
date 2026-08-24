@@ -38,8 +38,12 @@ struct CanvasViewState: Equatable {
     /// 押下中の元画像比較。
     var isShowingOriginal: Bool = false
 
-    /// スプリット比較の境界位置（0〜1）。1.0 は全面が処理結果。
-    var splitPosition: Double = 1.0
+    /// スプリット比較の境界位置（0〜1）。
+    ///
+    /// 境界より右が処理結果、左が原画（Before | After の並び）。
+    /// 0.0 なら全面が処理結果で、これが既定。
+    /// シェーダの判定（`texCoord.x > splitPosition` なら処理結果）と対応させること。
+    var splitPosition: Double = 0.0
 
     /// マスクオーバーレイの表示。
     var isMaskOverlayVisible: Bool = false

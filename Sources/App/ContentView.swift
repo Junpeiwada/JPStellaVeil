@@ -15,10 +15,10 @@ struct ContentView: View {
 
                 Divider()
 
-                HStack(spacing: 0) {
+                // キャンバスとレイヤーパネルの境界はドラッグで動かせる（UI.md の要件）
+                HSplitView {
                     CanvasContainer()
-
-                    Divider()
+                        .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
 
                     LayerPanel()
                 }
@@ -319,7 +319,7 @@ private struct StatusBar: View {
                 .font(.caption)
                 .monospacedDigit()
 
-            if appState.canvasViewState.splitPosition < 0.999 {
+            if appState.canvasViewState.splitPosition > 0.001 {
                 Text("スプリット比較 \(Int(appState.canvasViewState.splitPosition * 100))%")
                     .font(.caption)
                 Button("解除") {
@@ -327,6 +327,17 @@ private struct StatusBar: View {
                 }
                 .buttonStyle(.link)
                 .font(.caption)
+            }
+
+            if case .running(let completed, let total) = appState.processingState {
+                Text("処理中 \(completed)/\(total) タイル")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.blue)
+            } else if appState.hasUnappliedChanges, !appState.project.visibleLayers.isEmpty {
+                Text("未適用の変更あり")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
 
             Text(appState.lastStatusMessage)
