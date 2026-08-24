@@ -47,7 +47,8 @@ struct SidePanel: View {
 
             ApplyBar()
         }
-        .frame(minWidth: 300, idealWidth: 340)
+        // 幅は ContentView 側で管理する（ウィンドウを広げても変わらないようにするため）
+        .frame(maxWidth: .infinity)
     }
 }
 

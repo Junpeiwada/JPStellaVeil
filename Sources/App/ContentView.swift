@@ -6,18 +6,27 @@ struct ContentView: View {
     @EnvironmentObject private var appState: AppState
     @State private var isImporterPresented = false
 
+    /// サイドパネルの幅。終了しても覚えておく。
+    @AppStorage("sidePanelWidth") private var sidePanelWidth: Double = 340
+
     var body: some View {
         VStack(spacing: 0) {
             CanvasToolbar(isImporterPresented: $isImporterPresented)
 
             Divider()
 
-            // キャンバスとサイドパネルの境界はドラッグで動かせる（UI.md の要件）
-            HSplitView {
+            // キャンバスとサイドパネルの境界はドラッグで動かせる（UI.md の要件）。
+            // HSplitView を使わないのは、ウィンドウをリサイズしたときに
+            // サイドパネルまで伸縮してしまうため。幅はここで固定し、
+            // ウィンドウの伸縮はキャンバス側が吸収する。
+            HStack(spacing: 0) {
                 CanvasContainer()
                     .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
 
+                PanelDivider(width: $sidePanelWidth)
+
                 SidePanel()
+                    .frame(width: sidePanelWidth)
             }
 
             Divider()
@@ -181,6 +190,53 @@ private struct ZoomSelection: Identifiable, Hashable {
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+// MARK: - パネルの境界
+
+/// キャンバスとサイドパネルの間の、ドラッグで幅を変えられる境界。
+private struct PanelDivider: View {
+    @Binding var width: Double
+
+    /// ドラッグ開始時の幅。ドラッグ中の累積移動量と合わせて使う。
+    @State private var widthAtDragStart: Double?
+
+    /// パネル幅の可動域。
+    private static let bounds: ClosedRange<Double> = 260...640
+
+    var body: some View {
+        Divider()
+            .overlay(alignment: .center) {
+                // 線そのものは細いので、掴みやすいよう当たり判定を広げる
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 10)
+                    .contentShape(Rectangle())
+                    .onHover { isInside in
+                        if isInside {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let start = widthAtDragStart ?? width
+                                if widthAtDragStart == nil {
+                                    widthAtDragStart = start
+                                }
+
+                                // 右へドラッグするとパネルは狭くなる
+                                width = (start - Double(value.translation.width))
+                                    .clamped(to: PanelDivider.bounds)
+                            }
+                            .onEnded { _ in
+                                widthAtDragStart = nil
+                            }
+                    )
+            }
     }
 }
 
