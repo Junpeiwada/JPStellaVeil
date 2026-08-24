@@ -458,6 +458,74 @@ final class GlowPipelineTests: XCTestCase {
         )
     }
 
+    /// 明るさ下限を上げても、残った星のグローは暗くならないこと。
+    ///
+    /// 引き算で下限を適用していたときは、残った星まで下限のぶん暗くなっていた。
+    /// また画素ごとに判定すると星が外周から削られて痩せるため、近傍のピークで判定している。
+    func testBrightnessFloorKeepsSelectedStarsBright() throws {
+        let pipeline = try makePipeline()
+        let width = 64
+        let height = 64
+
+        // 明るい星と暗い星をひとつずつ
+        let brightCenter = (x: 20, y: 32)
+        let faintCenter = (x: 44, y: 32)
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, y in
+            let bright = abs(x - brightCenter.x) <= 1 && abs(y - brightCenter.y) <= 1
+            let faint = abs(x - faintCenter.x) <= 1 && abs(y - faintCenter.y) <= 1
+
+            if bright { return 0.8 }
+            if faint { return 0.06 }
+            return 0.0
+        }
+
+        var layer = makeTestLayer()
+        layer.blendMode = .add
+        layer.extraction.backgroundRemoval = 0
+
+        func brightestGlow(floor: Double) throws -> Float {
+            var scaled = layer
+            scaled.extraction.brightnessFloor = floor
+
+            let output = try pipeline.makeOutputTexture(width: width, height: height)
+            try pipeline.process(
+                original: input,
+                output: output,
+                layers: [scaled],
+                outputMode: .glowOnly
+            )
+
+            return readValues(from: output, pipeline: pipeline).max() ?? 0
+        }
+
+        let withoutFloor = try brightestGlow(floor: 0.0)
+        let withFloor = try brightestGlow(floor: 0.2)
+
+        XCTAssertGreaterThan(withoutFloor, 0)
+
+        // 暗い星（0.06）は下限 0.2 で捨てられるが、明るい星（0.8）はそのまま残る
+        XCTAssertEqual(
+            Double(withFloor),
+            Double(withoutFloor),
+            accuracy: Double(withoutFloor) * 0.1,
+            "下限を上げたら残った星まで暗くなっている"
+        )
+
+        // 暗い星の位置にはグローが乗らない
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+        var scaled = layer
+        scaled.extraction.brightnessFloor = 0.2
+        try pipeline.process(original: input, output: output, layers: [scaled], outputMode: .glowOnly)
+
+        let result = readValues(from: output, pipeline: pipeline)
+        XCTAssertLessThan(
+            result[faintCenter.y * width + faintCenter.x],
+            result[brightCenter.y * width + brightCenter.x] * 0.1,
+            "暗い星が捨てられていない"
+        )
+    }
+
     /// 星の明るさ分布を測れること。
     func testMeasureStarHistogramFindsBrightPixels() throws {
         let pipeline = try makePipeline()

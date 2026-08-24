@@ -169,6 +169,7 @@ final class GlowPipeline {
         case blurVerticalAccumulate
         case clearAccumulator
         case extractStars
+        case applyStarFloor
         case compositeGlow
         case writeTileOutput
         case writeTileOutputUnclamped
@@ -351,12 +352,18 @@ final class GlowPipeline {
         let bufferWidth = grid.maximumRegionWidth
         let bufferHeight = grid.maximumRegionHeight
 
-        // star（星成分）、work（ぼかし作業用）、accumulators（4 成分 PSF の累積、ping-pong）
+        // star（生の星成分）、peak（下限判定用）、gated（下限適用後）、work（作業用）、
+        // accumulators（4 成分 PSF の累積、ping-pong）
         let star = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
+        let peak = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
+        let gated = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
         let work = try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
         let accumulators = try (0..<2).map { _ in
             try makeIntermediateTexture(width: bufferWidth, height: bufferHeight)
         }
+
+        // 明るさ下限を星単位で判定するためのぼかし係数（全レイヤー共通）
+        let peakWeights = try makeWeightsBuffer(sigma: StarPeakDetection.sigma)
 
         let total = grid.tiles.count
         let batchSize = GlowPipeline.tilesPerCommandBuffer
@@ -386,8 +393,11 @@ final class GlowPipeline {
                     output: output,
                     resource: resource,
                     star: star,
+                    peak: peak,
+                    gated: gated,
                     work: work,
-                    accumulators: accumulators
+                    accumulators: accumulators,
+                    peakWeights: peakWeights
                 )
             }
 
@@ -722,8 +732,11 @@ final class GlowPipeline {
         output: MTLTexture,
         resource: LayerResource,
         star: MTLTexture,
+        peak: MTLTexture,
+        gated: MTLTexture,
         work: MTLTexture,
-        accumulators: [MTLTexture]
+        accumulators: [MTLTexture],
+        peakWeights: (buffer: MTLBuffer, radius: Int)
     ) {
         let offset = tile.outputOffsetInSource
         var params = GlowTileParams(
@@ -771,9 +784,8 @@ final class GlowPipeline {
             )
         }
 
-        // 2. 星成分の抽出（背景減算 + ノイズ下限）
+        // 2. 星成分の抽出（背景減算まで。下限はまだ適用しない）
         params.hasBackground = spec.subtractsBackground ? 1 : 0
-        params.threshold = spec.brightnessFloor
         dispatch(
             encoder: encoder,
             kernel: .extractStars,
@@ -784,7 +796,44 @@ final class GlowPipeline {
             height: regionHeight
         )
 
-        // 3. 4 成分 PSF でグローを作る
+        // 3. 明るさ下限を星単位で適用する。
+        //    判定には星成分を少しぼかしたものを使い、星の中心が明るければ
+        //    その星を周辺の淡い部分ごと残す。画素ごとに切ると星が痩せる。
+        params.radius = Int32(peakWeights.radius)
+        params.componentThreshold = 0
+
+        dispatch(
+            encoder: encoder,
+            kernel: .blurHorizontal,
+            textures: [star, gated],
+            params: &params,
+            weights: peakWeights.buffer,
+            width: regionWidth,
+            height: regionHeight
+        )
+
+        dispatch(
+            encoder: encoder,
+            kernel: .blurVertical,
+            textures: [gated, peak],
+            params: &params,
+            weights: peakWeights.buffer,
+            width: regionWidth,
+            height: regionHeight
+        )
+
+        params.threshold = spec.brightnessFloor
+        dispatch(
+            encoder: encoder,
+            kernel: .applyStarFloor,
+            textures: [star, peak, gated],
+            params: &params,
+            weights: nil,
+            width: regionWidth,
+            height: regionHeight
+        )
+
+        // 4. 4 成分 PSF でグローを作る
         var accumulatorIndex = 0
         dispatch(
             encoder: encoder,
@@ -804,7 +853,7 @@ final class GlowPipeline {
             dispatch(
                 encoder: encoder,
                 kernel: .blurHorizontal,
-                textures: [star, work],
+                textures: [gated, work],
                 params: &params,
                 weights: component.weights,
                 width: regionWidth,
@@ -824,7 +873,7 @@ final class GlowPipeline {
             accumulatorIndex = 1 - accumulatorIndex
         }
 
-        // 4. マージンを捨て、中央部だけを書き戻す。
+        // 5. マージンを捨て、中央部だけを書き戻す。
         //    ゲインは描画時に掛けるので、ここでは 1 に丸めない。
         dispatch(
             encoder: encoder,

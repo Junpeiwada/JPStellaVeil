@@ -44,13 +44,17 @@ struct GlowTileParams {
     uint hasBackground;
 };
 
-/// 成分ごとの明るさしきい値を適用する。
+/// 明るさしきい値のゲートを作る。
 ///
-/// しきい値を「引く」と振幅まで落ちてしまい、明るい星の裾が痩せる。
-/// そこで引き算ではなく、しきい値付近で滑らかに立ち上がるゲートを掛ける。
-/// しきい値を十分超えた星は元の明るさのまま裾が乗り、
-/// 届かない星にはその成分が乗らない。
-static inline float3 applyBrightnessGate(float3 value, float threshold) {
+/// `reference` は判定に使う明るさ、`value` は実際に通す値。
+/// 星は中心が明るく周辺ほど暗いので、画素ごとの明るさで判定すると
+/// しきい値を上げるほど星が外周から削られて痩せてしまう。
+/// 判定には近傍のピーク（わずかにぼかした値）を渡し、
+/// 「星の中心が明るければ、その星は周辺の淡い部分ごと残す」形にする。
+///
+/// 立ち上がりを狭くしてあるのは、通った星の明るさを保つため。
+/// 引き算にすると、しきい値のぶんだけ星まで暗くなってしまう。
+static inline float3 applyBrightnessGate(float3 value, float3 reference, float threshold) {
     // 背景より暗い部分は星ではないので捨てる
     float3 positive = max(value, 0.0);
 
@@ -58,7 +62,7 @@ static inline float3 applyBrightnessGate(float3 value, float threshold) {
         return positive;
     }
 
-    float3 gate = smoothstep(float3(threshold), float3(threshold * 1.5), positive);
+    float3 gate = smoothstep(float3(threshold), float3(threshold * 1.08), max(reference, 0.0));
     return positive * gate;
 }
 
@@ -145,12 +149,22 @@ kernel void blurHorizontal(
 
     int2 center = int2(gid);
     float threshold = params.componentThreshold;
-    float3 sum = applyBrightnessGate(source.read(gid).rgb, threshold) * weights[0];
+
+    // 判定にも同じ画素の値を使う。
+    // ここへ渡ってくる星成分は既に明るさ下限のゲートを通っており、
+    // 成分ごとのしきい値は「その星がどこまで広い成分に届くか」を決めるだけなので、
+    // 近傍ピークまで見る必要はない。
+    float3 first = source.read(gid).rgb;
+    float3 sum = applyBrightnessGate(first, first, threshold) * weights[0];
 
     for (int k = 1; k <= params.radius; ++k) {
         float w = weights[k];
-        sum += applyBrightnessGate(source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb, threshold) * w;
-        sum += applyBrightnessGate(source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb, threshold) * w;
+
+        float3 left = source.read(clampToRegion(int2(center.x - k, center.y), params)).rgb;
+        float3 right = source.read(clampToRegion(int2(center.x + k, center.y), params)).rgb;
+
+        sum += applyBrightnessGate(left, left, threshold) * w;
+        sum += applyBrightnessGate(right, right, threshold) * w;
     }
 
     destination.write(float4(sum, 1.0), gid);
@@ -299,10 +313,31 @@ kernel void extractStars(
         color -= background.read(gid).rgb;
     }
 
-    // 明るさ下限は「選別」であって「減光」ではない。
-    // 引き算にすると残った星まで下限のぶん暗くなってしまうので、ゲートを掛ける。
-    float3 star = applyBrightnessGate(color, params.threshold);
-    destination.write(float4(star, 1.0), gid);
+    // ここでは明るさ下限を適用しない。
+    // 下限は星単位で効かせたいので、近傍ピークを見る applyStarFloor で行う。
+    destination.write(float4(max(color, 0.0), 1.0), gid);
+}
+
+/// 明るさ下限を星単位で適用する。
+///
+/// `peak` は星成分をわずかにぼかしたもの。星の中心の明るさが周辺にも伝わっているので、
+/// これで判定すると「明るい星は周辺の淡い部分ごと残り、暗い星は丸ごと消える」。
+/// 画素ごとの明るさで判定すると、しきい値を上げるほど星が外周から削られて痩せる。
+kernel void applyStarFloor(
+    texture2d<float, access::read> star [[texture(0)]],
+    texture2d<float, access::read> peak [[texture(1)]],
+    texture2d<float, access::write> destination [[texture(2)]],
+    constant GlowTileParams &params [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (isOutsideRegion(gid, params)) {
+        return;
+    }
+
+    float3 value = star.read(gid).rgb;
+    float3 reference = peak.read(gid).rgb;
+
+    destination.write(float4(applyBrightnessGate(value, reference, params.threshold), 1.0), gid);
 }
 
 /// グローを合成先へ重ねる。

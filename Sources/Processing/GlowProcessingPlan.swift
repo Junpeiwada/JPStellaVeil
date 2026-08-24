@@ -94,6 +94,18 @@ struct GlowPSFComponent: Equatable {
     let brightnessThresholdScale: Double
 }
 
+/// 明るさ下限を星単位で判定するための、ピーク検出用ぼかしの σ。
+///
+/// 星の中心の明るさを周辺へ伝えるためのもの。星の典型的な大きさに合わせる。
+/// 画素ごとの明るさで判定すると、下限を上げるほど星が外周から削られて痩せる。
+enum StarPeakDetection {
+    static let sigma: Double = 1.5
+
+    static var radius: Int {
+        GaussianKernel.radius(sigma: sigma)
+    }
+}
+
 /// 天体写真のグロー形状を作る 4 成分ガウシアン PSF。
 ///
 /// 単一ガウシアンでは「芯が明るく裾が長い」形にならない。
@@ -234,7 +246,9 @@ struct GlowLayerProcessingSpec: Equatable {
 
         let backgroundKernelRadius = GaussianKernel.radius(sigma: sigmaBackground)
         let glowKernelRadius = sigmas.map { GaussianKernel.radius(sigma: $0) }.max() ?? 0
-        self.apron = backgroundKernelRadius + glowKernelRadius
+
+        // 背景推定 → ピーク検出 → グローの順に直列で掛かるので、半径を足し合わせる
+        self.apron = backgroundKernelRadius + StarPeakDetection.radius + glowKernelRadius
     }
 
     /// 背景減算を行うか。

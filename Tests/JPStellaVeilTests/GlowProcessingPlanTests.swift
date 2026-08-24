@@ -142,8 +142,11 @@ final class GlowProcessingPlanTests: XCTestCase {
         let backgroundRadius = GaussianKernel.radius(sigma: 12.0 / 3.0)
         let widestGlowRadius = GaussianKernel.radius(sigma: (20.0 / 3.0) * 2.2)
 
-        // 背景減算とグローは直列に掛かるので、半径は足し合わせないと継ぎ目が出る
-        XCTAssertEqual(spec.apron, backgroundRadius + widestGlowRadius)
+        // 背景減算 → ピーク検出 → グローが直列に掛かるので、半径は足し合わせないと継ぎ目が出る
+        XCTAssertEqual(
+            spec.apron,
+            backgroundRadius + StarPeakDetection.radius + widestGlowRadius
+        )
     }
 
     func testBackgroundRemovalZeroDisablesSubtraction() {
@@ -153,7 +156,12 @@ final class GlowProcessingPlanTests: XCTestCase {
 
         XCTAssertFalse(spec.subtractsBackground)
         XCTAssertEqual(spec.backgroundSigma, 0)
-        XCTAssertEqual(spec.apron, GaussianKernel.radius(sigma: (20.0 / 3.0) * 2.2))
+
+        // 背景減算をしなくても、ピーク検出とグローのぶんは必要
+        XCTAssertEqual(
+            spec.apron,
+            StarPeakDetection.radius + GaussianKernel.radius(sigma: (20.0 / 3.0) * 2.2)
+        )
     }
 
     // MARK: - 再処理の要否
