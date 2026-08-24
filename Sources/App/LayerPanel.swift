@@ -208,7 +208,7 @@ private struct LayerList: View {
                 .selectionDisabled()
             }
             .listStyle(.inset)
-            .frame(minHeight: 180)
+            .frame(minHeight: 110)
         }
     }
 
@@ -272,7 +272,7 @@ private struct LayerInspector: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text(layer.name)
                     .font(.headline)
                     .lineLimit(1)
@@ -299,7 +299,8 @@ private struct LayerInspector: View {
                         format: { "\(Int(($0 * 100).rounded()))%" },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.opacity = newValue }
-                        }
+                        },
+                        explanation: "このレイヤーのグローをどれだけ効かせるか"
                     )
                 }
 
@@ -312,7 +313,8 @@ private struct LayerInspector: View {
                         format: { String(format: "%.2f", $0) },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.glow.intensity = newValue }
-                        }
+                        },
+                        explanation: "グローの明るさ。星の数は変わりません"
                     )
 
                     ParameterSlider(
@@ -323,7 +325,8 @@ private struct LayerInspector: View {
                         format: { "\(Int($0.rounded())) px" },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.glow.radius = newValue }
-                        }
+                        },
+                        explanation: "ハローの広がり。広げすぎると星ではなく空が霞みます"
                     )
 
                     ParameterSlider(
@@ -350,15 +353,18 @@ private struct LayerInspector: View {
                 }
 
                 InspectorSection("星の抽出") {
+                    // 内部名は backgroundRemoval（実際に背景を引く処理）だが、
+                    // 利用者からは「どの大きさまでを星とみなすか」の設定に見える
                     ParameterSlider(
-                        title: "背景除去",
+                        title: "星とみなす大きさ",
                         value: layer.extraction.backgroundRemoval,
                         range: StarExtractionParameters.backgroundRemovalRange,
                         defaultValue: 12,
                         format: { "\(Int($0.rounded())) px" },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.extraction.backgroundRemoval = newValue }
-                        }
+                        },
+                        explanation: "これより小さい構造を星とみなします。大きくすると天の川の淡い部分も対象になります。0 にすると空全体が光ってしまうので避けてください"
                     )
 
                     ParameterSlider(
@@ -397,53 +403,6 @@ private struct LayerInspector: View {
                 InspectorSection("空マスク") {
                     SkyMaskControls()
 
-                    Divider()
-
-                    // 以下は未接続。マスクは Photoshop の「空を選択」で作っている
-                    Group {
-                        Toggle("自動空マスク", isOn: Binding(
-                            get: { layer.skyMask.isAutoEnabled },
-                            set: { newValue in
-                                appState.updateLayer(id: layer.id) { $0.skyMask.isAutoEnabled = newValue }
-                            }
-                        ))
-
-                        HStack {
-                            Text("地平線")
-                                .font(.caption)
-                            Spacer()
-                            Text(layer.skyMask.horizonY.map { "\(Int(($0 * 100).rounded()))%" } ?? "自動")
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Slider(
-                            value: Binding(
-                                get: { layer.skyMask.horizonY ?? 0.5 },
-                                set: { newValue in
-                                    appState.updateLayer(id: layer.id) { $0.skyMask.horizonY = newValue }
-                                }
-                            ),
-                            in: 0...1
-                        )
-
-                        ParameterSlider(
-                            title: "境界ぼかし",
-                            value: layer.skyMask.featherRadius,
-                            range: SkyMaskState.featherRadiusRange,
-                            defaultValue: 60,
-                            format: { "\(Int($0.rounded())) px" },
-                            onChange: { newValue in
-                                appState.updateLayer(id: layer.id) { $0.skyMask.featherRadius = newValue }
-                            }
-                        )
-                    }
-                    .disabled(true)
-
-                    Text("地平線と境界ぼかしはまだ処理に繋がっていません")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                 }
             }
             .padding(12)
@@ -525,6 +484,7 @@ private struct SkyMaskControls: View {
     }
 }
 
+/// インスペクタの 1 区画。見出しと中身をまとめる。
 private struct InspectorSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -535,7 +495,7 @@ private struct InspectorSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.subheadline.bold())
                 .foregroundStyle(.secondary)

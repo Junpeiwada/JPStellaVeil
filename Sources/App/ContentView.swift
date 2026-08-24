@@ -61,22 +61,17 @@ private struct CanvasToolbar: View {
                 Label("開く", systemImage: "folder")
             }
 
-            Menu {
-                Button("中間 TIFF を書き出す") {
-                    showSavePanel(title: "中間 TIFF を書き出す", fileName: "JPStellaVeil-intermediate.tif") { url in
-                        appState.exportIntermediate(to: url)
-                    }
-                }
-
-                Button("最終 TIFF を書き出す（検証あり）") {
-                    showSavePanel(title: "最終 TIFF を書き出す", fileName: "JPStellaVeil-final.tif") { url in
-                        appState.exportFinal(to: url)
-                    }
+            // 中間 TIFF（linearSRGB へ変換するだけでグローを含まない）は
+            // 色管理の検証用なのでメニューには出さない。処理は AppState に残してある
+            Button {
+                showSavePanel(title: "TIFF を書き出す", fileName: "JPStellaVeil-final.tif") { url in
+                    appState.exportFinal(to: url)
                 }
             } label: {
                 Label("書き出す", systemImage: "square.and.arrow.up")
             }
             .disabled(appState.project.inputImage == nil)
+            .help("グローと空マスクを適用し、入力と同じ ICC へ戻して保存します（メタデータも検証します）")
 
             Divider().frame(height: 18)
 
