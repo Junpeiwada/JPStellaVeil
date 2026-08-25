@@ -21,6 +21,13 @@ struct MetadataComparisonPolicy: Equatable {
     /// 比較から除外するグループ名（ExifTool の -G 出力に現れるグループ）。
     let excludedGroups: Set<String>
 
+    /// 数値タグの相対誤差の許容量。0 なら完全一致のみを同値とみなす。
+    ///
+    /// ExifTool でタグをコピーすると有理数（APEX 値など）が書き戻しの際に
+    /// 丸められる（`1.79958` → `1.8`）。値としては同じものなので、
+    /// コピー経路の検証だけこの許容を効かせる。
+    let numericTolerance: Double
+
     static let `default` = MetadataComparisonPolicy(
         excludedTagNames: [
             // ExifTool の JSON 出力が付与するグループ修飾なしのファイルパス
@@ -70,7 +77,25 @@ struct MetadataComparisonPolicy: Equatable {
             "ExifTool",
             "File",
             "Composite"
-        ]
+        ],
+        numericTolerance: 0
+    )
+
+    /// ExifTool でメタデータをコピーした後の比較に使うポリシー。
+    ///
+    /// ExifTool は書き込み時に自身の痕跡を残す（XMPToolkit の書き換え、
+    /// IPTC 書き込みに伴う EnvelopeRecordVersion の付与）。これらは
+    /// 入力の情報が失われたわけではないので、コピー経路でのみ除外する。
+    static let afterExifToolCopy = MetadataComparisonPolicy(
+        excludedTagNames: MetadataComparisonPolicy.default.excludedTagNames.union([
+            // ExifTool が書き込み時に自分の名前へ差し替える
+            "XMPToolkit",
+            // IPTC を書き込むと ExifTool が自動で付与する
+            "EnvelopeRecordVersion"
+        ]),
+        excludedTagPrefixes: MetadataComparisonPolicy.default.excludedTagPrefixes,
+        excludedGroups: MetadataComparisonPolicy.default.excludedGroups,
+        numericTolerance: 1e-3
     )
 
     /// タグを比較対象とするか判定する。
@@ -91,6 +116,30 @@ struct MetadataComparisonPolicy: Equatable {
         }
 
         return true
+    }
+
+    /// 2 つの正規化済みタグ値を同値とみなせるか判定する。
+    ///
+    /// 文字列が一致しなくても、双方が数値として解釈でき、相対誤差が
+    /// `numericTolerance` 以内なら同値とみなす。
+    func valuesAreEquivalent(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs {
+            return true
+        }
+
+        guard numericTolerance > 0,
+              let left = Double(lhs),
+              let right = Double(rhs) else {
+            return false
+        }
+
+        let scale = Swift.max(abs(left), abs(right))
+
+        guard scale > 0 else {
+            return true
+        }
+
+        return abs(left - right) / scale <= numericTolerance
     }
 
     /// タグ値の正規化。

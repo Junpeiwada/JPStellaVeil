@@ -128,6 +128,7 @@ struct ApplyBar: View {
 
 private struct LayerList: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var presetStore: GlowPresetStore
     @State private var renamingLayerID: UUID?
     @State private var draftName: String = ""
 
@@ -140,9 +141,22 @@ private struct LayerList: View {
                 Spacer()
 
                 Menu {
-                    ForEach(GlowPreset.allCases) { preset in
-                        Button(preset.displayName) {
-                            appState.addLayer(preset: preset)
+                    Section("組み込み") {
+                        ForEach(GlowPreset.allCases) { preset in
+                            Button(preset.displayName) {
+                                appState.addLayer(preset: preset)
+                            }
+                        }
+                    }
+
+                    // ここは構成の置き換えではなく、現在の構成へ重ねる操作
+                    if !presetStore.presets.isEmpty {
+                        Section("マイプリセット") {
+                            ForEach(presetStore.presets) { record in
+                                Button(addMenuTitle(record)) {
+                                    appState.addLayers(from: record)
+                                }
+                            }
                         }
                     }
                 } label: {
@@ -155,6 +169,8 @@ private struct LayerList: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+
+            PresetBar()
 
             List(selection: Binding(
                 get: { appState.selectedLayerID },
@@ -221,6 +237,11 @@ private struct LayerList: View {
     private func reversedDestination(_ destination: Int) -> Int {
         let count = appState.project.layers.count
         return count - destination
+    }
+
+    /// 追加メニューの項目名。複数枚のプリセットは枚数を添える。
+    private func addMenuTitle(_ record: GlowPresetRecord) -> String {
+        record.layers.count > 1 ? "\(record.name)（\(record.layers.count) 枚を追加）" : record.name
     }
 }
 

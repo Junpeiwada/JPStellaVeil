@@ -7,6 +7,12 @@ struct StellaVeilProject: Codable, Equatable {
     /// グローレイヤー。配列の末尾が最前面（ベース画像の上に順に重なる）。
     var layers: [GlowLayer]
 
+    /// 適用中のプリセット。組み込みプリセットの ID も入る。
+    ///
+    /// パラメータを編集しても外さない。外すと「どれを上書きするか」を見失うため。
+    /// プリセットから変わったかどうかは、この ID の中身とレイヤー構成を比べて判断する。
+    var appliedPresetID: UUID?
+
     static let empty = StellaVeilProject(
         schemaVersion: 1,
         inputImage: nil,
@@ -83,6 +89,14 @@ struct StellaVeilProject: Codable, Equatable {
     /// 描画対象となる可視レイヤー（下から順）。
     var visibleLayers: [GlowLayer] {
         layers.filter(\.isVisible)
+    }
+
+    /// いま使っている空マスクの状態。
+    ///
+    /// マスクは実質すべてのレイヤーで共通なので、先頭のものを代表として扱う。
+    /// プリセットは空マスクを持たないため、適用時にこれを引き継がせる。
+    var currentSkyMaskState: SkyMaskState {
+        layers.first?.skyMask ?? SkyMaskState(isAutoEnabled: true, horizonY: nil, featherRadius: 60)
     }
 }
 

@@ -64,7 +64,11 @@ private struct CanvasToolbar: View {
             // 中間 TIFF（linearSRGB へ変換するだけでグローを含まない）は
             // 色管理の検証用なのでメニューには出さない。処理は AppState に残してある
             Button {
-                showSavePanel(title: "TIFF を書き出す", fileName: "JPStellaVeil-final.tif") { url in
+                showSavePanel(
+                    title: "TIFF を書き出す",
+                    fileName: defaultExportFileName,
+                    directory: defaultExportDirectory
+                ) { url in
                     appState.exportFinal(to: url)
                 }
             } label: {
@@ -136,10 +140,40 @@ private struct CanvasToolbar: View {
         .padding(.vertical, 8)
     }
 
-    private func showSavePanel(title: String, fileName: String, action: @escaping (URL) -> Void) {
+    /// 書き出しの初期ファイル名。元ファイル名の末尾に _JPStellaVeil を足し、拡張子はそのまま残す。
+    private var defaultExportFileName: String {
+        guard let path = appState.project.inputImage?.filePath else {
+            return "JPStellaVeil.tif"
+        }
+
+        let url = URL(fileURLWithPath: path)
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let name = base + "_JPStellaVeil"
+        return ext.isEmpty ? name : name + "." + ext
+    }
+
+    /// 書き出しの初期表示フォルダ。元ファイルと同じ場所へ出すのが既定。
+    private var defaultExportDirectory: URL? {
+        guard let path = appState.project.inputImage?.filePath else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: path).deletingLastPathComponent()
+    }
+
+    private func showSavePanel(
+        title: String,
+        fileName: String,
+        directory: URL?,
+        action: @escaping (URL) -> Void
+    ) {
         let panel = NSSavePanel()
         panel.title = title
         panel.nameFieldStringValue = fileName
+        // 元ファイルと同じフォルダを初期表示にする。nil のときは
+        // NSSavePanel が前回の保存先を覚えている既定動作に任せる。
+        panel.directoryURL = directory
         panel.allowedContentTypes = [.tiff]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -349,6 +383,7 @@ private struct CanvasPlaceholder: View {
 private struct StatusBar: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var display: CanvasDisplayState
+    @EnvironmentObject private var presetStore: GlowPresetStore
 
     var body: some View {
         HStack(spacing: 16) {
@@ -390,6 +425,14 @@ private struct StatusBar: View {
                 .truncationMode(.middle)
 
             Spacer()
+
+            // プリセットの読み書き失敗は、そのままだと管理シートを開くまで気づけない
+            if let message = presetStore.lastErrorMessage {
+                Label("プリセット", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help(message)
+            }
 
             if !appState.isExifToolAvailable {
                 Label("ExifTool 未検出", systemImage: "exclamationmark.triangle")

@@ -47,4 +47,48 @@ final class MetadataComparisonPolicyTests: XCTestCase {
     func testDivisionByZeroIsLeftAsIs() {
         XCTAssertEqual(policy.normalizeValue("1/0"), "1/0")
     }
+
+    // MARK: - ExifTool コピー後のポリシー
+
+    func testAfterCopyPolicyExcludesExifToolTraces() {
+        let policy = MetadataComparisonPolicy.afterExifToolCopy
+
+        // ExifTool が書き込み時に残す痕跡は比較対象から外れる
+        XCTAssertFalse(policy.shouldCompare(group: "XMP", tagName: "XMPToolkit"))
+        XCTAssertFalse(policy.shouldCompare(group: "IPTC", tagName: "EnvelopeRecordVersion"))
+
+        // 既定ポリシーでは依然として比較対象
+        XCTAssertTrue(MetadataComparisonPolicy.default.shouldCompare(group: "XMP", tagName: "XMPToolkit"))
+        XCTAssertTrue(MetadataComparisonPolicy.default.shouldCompare(group: "IPTC", tagName: "EnvelopeRecordVersion"))
+
+        // 既定の除外規則は引き継がれている
+        XCTAssertFalse(policy.shouldCompare(group: "File", tagName: "FileSize"))
+        XCTAssertTrue(policy.shouldCompare(group: "EXIF", tagName: "Make"))
+    }
+
+    func testAfterCopyPolicyToleratesRationalRounding() {
+        let policy = MetadataComparisonPolicy.afterExifToolCopy
+
+        // ExifTool が APEX 値を書き戻すと 1.79958 が 1.8 になる
+        let input = policy.normalizeValue("1.79958")
+        let output = policy.normalizeValue("1.8")
+
+        XCTAssertNotEqual(input, output)
+        XCTAssertTrue(policy.valuesAreEquivalent(input, output))
+
+        // 既定ポリシーは丸めを許容しない
+        XCTAssertFalse(MetadataComparisonPolicy.default.valuesAreEquivalent(input, output))
+    }
+
+    func testAfterCopyPolicyStillDetectsRealValueChange() {
+        let policy = MetadataComparisonPolicy.afterExifToolCopy
+
+        // 許容量を超える数値差は見逃さない
+        XCTAssertFalse(policy.valuesAreEquivalent("1.8", "2.8"))
+        XCTAssertFalse(policy.valuesAreEquivalent("100", "100.5"))
+
+        // 数値でない値は文字列一致のみ
+        XCTAssertFalse(policy.valuesAreEquivalent("Canon", "Nikon"))
+        XCTAssertTrue(policy.valuesAreEquivalent("Canon", "Canon"))
+    }
 }

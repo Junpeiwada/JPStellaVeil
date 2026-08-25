@@ -13,6 +13,7 @@ struct JPStellaVeilApp: App {
             ContentView()
                 .environmentObject(appState)
                 .environmentObject(appState.canvasDisplay)
+                .environmentObject(appState.presetStore)
                 .frame(minWidth: 1100, minHeight: 700)
                 .onAppear {
                     guard !hasAppliedLaunchOptions else { return }

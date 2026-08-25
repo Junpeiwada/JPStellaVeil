@@ -113,13 +113,18 @@ final class AppState: ObservableObject {
     private let tiffService: TIFFImageIOService
     private let metadataService: MetadataVerificationService
 
+    /// 保存済みプリセットの置き場。
+    let presetStore: GlowPresetStore
+
     init(
         project: StellaVeilProject = .empty,
-        metadataService: MetadataVerificationService = MetadataVerificationService()
+        metadataService: MetadataVerificationService = MetadataVerificationService(),
+        presetStore: GlowPresetStore = GlowPresetStore()
     ) {
         self.project = project
         self.tiffService = TIFFImageIOService()
         self.metadataService = metadataService
+        self.presetStore = presetStore
 
         do {
             let renderer = try CanvasRenderer()
@@ -314,10 +319,42 @@ final class AppState: ObservableObject {
             return
         }
 
+        let wasEmpty = project.layers.isEmpty
+
         let layer = GlowLayer.makePreset(preset)
         project.addLayer(layer)
+
+        // 1枚目ならこの組み込みプリセットが構成そのものなので、適用中として扱う。
+        // 2枚目以降は元の構成を作り替えたことになるので、適用中プリセットは変えない
+        if wasEmpty {
+            project.appliedPresetID = preset.presetID
+        }
+
         selectedLayerID = layer.id
         lastStatusMessage = "レイヤーを追加しました: \(layer.name)"
+        requestPreviewUpdate()
+    }
+
+    /// 保存済みプリセットのレイヤーを最前面へ重ねる。構成の置き換えは行わない。
+    func addLayers(from preset: GlowPresetRecord) {
+        let maximum = processingController?.maximumLayerCount ?? GlowPipeline.maximumLayerCount
+        guard project.layers.count + preset.layers.count <= maximum else {
+            lastStatusMessage = "レイヤーは \(maximum) 枚までです"
+            return
+        }
+
+        let wasEmpty = project.layers.isEmpty
+        let added = preset.makeLayers(skyMask: project.currentSkyMaskState)
+        guard !added.isEmpty else { return }
+
+        project.layers.append(contentsOf: added)
+
+        if wasEmpty {
+            project.appliedPresetID = preset.id
+        }
+
+        selectedLayerID = project.layers.last?.id
+        lastStatusMessage = "プリセットのレイヤーを追加しました: \(preset.name)"
         requestPreviewUpdate()
     }
 
@@ -347,6 +384,12 @@ final class AppState: ObservableObject {
 
         if selectedLayerID == id {
             selectedLayerID = project.layers.last?.id
+        }
+
+        // 全部消したら構成が無くなるので、適用中プリセットの参照も外す。
+        // 残しておくと「空の構成なのに変更あり」という読みにくい表示になる
+        if project.layers.isEmpty {
+            project.appliedPresetID = nil
         }
 
         lastStatusMessage = removedName.map { "レイヤーを削除しました: \($0)" } ?? "レイヤーを削除しました"
@@ -401,6 +444,93 @@ final class AppState: ObservableObject {
     func updateSelectedLayer(transform: (inout GlowLayer) -> Void) {
         guard let selectedLayerID else { return }
         updateLayer(id: selectedLayerID, transform: transform)
+    }
+
+    // MARK: - プリセット
+
+    /// 適用中のプリセット。組み込みも含む。
+    var appliedPreset: GlowPresetRecord? {
+        project.appliedPresetID.flatMap { presetStore.preset(id: $0) }
+    }
+
+    /// 適用中プリセットから中身が変わっているか。「変更あり」バッジの判定。
+    var hasPresetModifications: Bool {
+        guard let preset = appliedPreset else { return false }
+        return !preset.matches(project.layers)
+    }
+
+    /// 上書き保存できるか。組み込みプリセットとレイヤー無しは対象外。
+    var canOverwriteAppliedPreset: Bool {
+        guard let id = project.appliedPresetID, !project.layers.isEmpty else { return false }
+        return presetStore.canOverwrite(id: id)
+    }
+
+    /// プリセットを適用する。既存のレイヤーは全部入れ替える。
+    ///
+    /// レイヤーを1枚ずつ差し替えるとプレビュー更新要求が枚数分だけ立ち、
+    /// フル解像度処理が無駄に何度も起動する。ここでは配列ごと差し替えて要求を1回に抑える。
+    func applyPreset(_ preset: GlowPresetRecord) {
+        let maximum = processingController?.maximumLayerCount ?? GlowPipeline.maximumLayerCount
+        guard preset.layers.count <= maximum else {
+            lastStatusMessage = "このプリセットはレイヤーが \(preset.layers.count) 枚あり、上限 \(maximum) 枚を超えています"
+            return
+        }
+
+        // 空マスクはプリセットに含まれないので、いまの状態を引き継ぐ
+        project.layers = preset.makeLayers(skyMask: project.currentSkyMaskState)
+        project.appliedPresetID = preset.id
+
+        // レイヤーの ID は総入れ替えになる。付け替えないとインスペクタが空になる
+        selectedLayerID = project.layers.last?.id
+
+        lastStatusMessage = "プリセットを適用しました: \(preset.name)"
+        requestPreviewUpdate()
+        refreshHistogramIfNeeded()
+    }
+
+    /// 現在のレイヤー構成を新しいプリセットとして保存する。
+    ///
+    /// 同名のプリセットがあると置き換わる。確認は呼び出し側で取る。
+    @discardableResult
+    func saveAsNewPreset(name: String) -> GlowPresetRecord? {
+        guard !project.layers.isEmpty else {
+            lastStatusMessage = "保存するレイヤーがありません"
+            return nil
+        }
+
+        guard let record = presetStore.save(name: name, layers: project.layers) else {
+            lastStatusMessage = presetStore.lastErrorMessage ?? "プリセットを保存できませんでした"
+            return nil
+        }
+
+        project.appliedPresetID = record.id
+        lastStatusMessage = "プリセットを保存しました: \(record.name)"
+        return record
+    }
+
+    /// 適用中のプリセットを現在のレイヤー構成で上書きする。
+    @discardableResult
+    func overwriteAppliedPreset() -> GlowPresetRecord? {
+        guard canOverwriteAppliedPreset, let id = project.appliedPresetID else { return nil }
+
+        guard let record = presetStore.overwrite(id: id, layers: project.layers) else {
+            lastStatusMessage = presetStore.lastErrorMessage ?? "プリセットを上書きできませんでした"
+            return nil
+        }
+
+        lastStatusMessage = "プリセットを上書きしました: \(record.name)"
+        return record
+    }
+
+    /// プリセットを削除する。適用中のものなら参照も外す。
+    func removePreset(id: UUID) {
+        guard presetStore.remove(id: id) else { return }
+
+        if project.appliedPresetID == id {
+            project.appliedPresetID = nil
+        }
+
+        lastStatusMessage = "プリセットを削除しました"
     }
 
     /// 保持しているグロー一式を描画側へ渡す。
@@ -739,16 +869,51 @@ final class AppState: ObservableObject {
                 return
             }
 
-            try metadataService.copyMetadata(from: inputURL, to: outputURL)
-            let verification = try metadataService.verify(inputURL: inputURL, outputURL: outputURL)
-            lastMetadataVerification = verification
+            // ImageIO へ入力のプロパティを渡して書き出しているので、通常は
+            // この時点でタグが揃っている。まず素の出力を検証し、
+            // 揃っていれば ExifTool でのコピーは行わない。
+            // ExifTool の書き込みは XMPToolkit の差し替えや有理数の丸めなど、
+            // 本来不要な差分を持ち込むため、欠落を補う必要があるときだけ使う。
+            var verification = try metadataService.verify(inputURL: inputURL, outputURL: outputURL)
 
             if verification.isVerified {
+                lastMetadataVerification = verification
                 lastStatusMessage = "書き出し完了（メタデータ検証済み \(verification.comparedTagCount) タグ）: \(outputURL.lastPathComponent)"
-            } else {
+                return
+            }
+
+            // 欠落や不一致があったので ExifTool で入力のタグを丸ごと補う。
+            // 補った後は ExifTool 自身が残す痕跡を許容するポリシーで判定する。
+            try metadataService.copyMetadata(from: inputURL, to: outputURL)
+            verification = try metadataService.verify(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                policy: .afterExifToolCopy
+            )
+            lastMetadataVerification = verification
+
+            guard verification.isVerified else {
                 try? FileManager.default.removeItem(at: outputURL)
                 lastStatusMessage = "メタデータ検証に失敗したため出力を中止しました（失敗 \(verification.differences.count) 件）"
+                return
             }
+
+            // ExifTool は ICC も書き戻すので、色管理を改めて確かめる。
+            let revalidation = try tiffService.validateExport(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                expectedProfile: .matchesInput
+            )
+            lastValidationFailureReasons = revalidation.failureReasons
+
+            guard revalidation.isCompatible else {
+                try? FileManager.default.removeItem(at: outputURL)
+                lastMetadataVerification = nil
+                lastStatusMessage = "メタデータ補完後の色管理検証に失敗したため出力を中止しました: \(revalidation.failureReasons.joined(separator: " / "))"
+                return
+            }
+
+            lastStatusMessage = "書き出し完了（メタデータを ExifTool で補完・検証済み \(verification.comparedTagCount) タグ）: \(outputURL.lastPathComponent)"
         } catch {
             lastMetadataVerification = nil
             lastStatusMessage = error.localizedDescription

@@ -77,17 +77,29 @@ final class MetadataVerificationService {
     }
 
     /// 入出力ファイルのメタデータを ExifTool で読み取り比較する。
-    func verify(inputURL: URL, outputURL: URL) throws -> MetadataVerificationResult {
+    ///
+    /// - Parameter policy: 比較規則。nil のときは初期化時のポリシーを使う。
+    ///   ExifTool でタグをコピーした後の検証には `.afterExifToolCopy` を渡す。
+    func verify(
+        inputURL: URL,
+        outputURL: URL,
+        policy: MetadataComparisonPolicy? = nil
+    ) throws -> MetadataVerificationResult {
         let input = try runner.readMetadata(at: inputURL)
         let output = try runner.readMetadata(at: outputURL)
 
-        return compare(input: input, output: output)
+        return compare(input: input, output: output, policy: policy)
     }
 
     /// 読み取り済みメタデータ同士を比較する（ExifTool 実行なしで単体テスト可能）。
-    func compare(input: ExifToolMetadata, output: ExifToolMetadata) -> MetadataVerificationResult {
-        let comparableInput = comparableTags(from: input)
-        let comparableOutput = comparableTags(from: output)
+    func compare(
+        input: ExifToolMetadata,
+        output: ExifToolMetadata,
+        policy overridePolicy: MetadataComparisonPolicy? = nil
+    ) -> MetadataVerificationResult {
+        let policy = overridePolicy ?? self.policy
+        let comparableInput = comparableTags(from: input, policy: policy)
+        let comparableOutput = comparableTags(from: output, policy: policy)
 
         let excludedCount = (input.tags.count - comparableInput.count)
             + (output.tags.count - comparableOutput.count)
@@ -109,7 +121,7 @@ final class MetadataVerificationService {
                 continue
             }
 
-            if inputValue != outputValue {
+            if !policy.valuesAreEquivalent(inputValue ?? "", outputValue) {
                 differences.append(
                     MetadataTagDifference(
                         qualifiedName: name,
@@ -140,7 +152,10 @@ final class MetadataVerificationService {
     }
 
     /// 除外規則を適用し、値を正規化した比較用辞書を作る。
-    private func comparableTags(from metadata: ExifToolMetadata) -> [String: String] {
+    private func comparableTags(
+        from metadata: ExifToolMetadata,
+        policy: MetadataComparisonPolicy
+    ) -> [String: String] {
         var result: [String: String] = [:]
 
         for (qualifiedName, rawValue) in metadata.tags {
