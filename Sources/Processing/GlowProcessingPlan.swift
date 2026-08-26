@@ -211,12 +211,14 @@ enum BlendMath {
 /// 変更しても畳み込みをやり直す必要がない。
 /// ここに含まれる値が変わったときだけ、そのレイヤーを再処理する。
 struct GlowConvolutionKey: Equatable {
+    let kind: GlowLayerKind
     let radius: Double
     let backgroundRemoval: Double
     let brightnessFloor: Double
     let brightnessResponse: Double
 
     init(layer: GlowLayer) {
+        self.kind = layer.kind
         self.radius = layer.glow.radius
         self.backgroundRemoval = layer.extraction.backgroundRemoval
         self.brightnessFloor = layer.extraction.brightnessFloor
@@ -228,6 +230,9 @@ struct GlowConvolutionKey: Equatable {
 
 /// `GlowLayer` の UI パラメータを、GPU 処理に必要な物理量へ変換したもの。
 struct GlowLayerProcessingSpec: Equatable {
+    /// レイヤーの種別。畳み込みの前段をどう組むかがこれで変わる。
+    let kind: GlowLayerKind
+
     /// 背景推定に使うぼかしの σ。0 なら背景減算を行わない。
     let backgroundSigma: Double
 
@@ -263,35 +268,56 @@ struct GlowLayerProcessingSpec: Equatable {
     let apron: Int
 
     init(layer: GlowLayer) {
-        let backgroundRadius = layer.extraction.backgroundRemoval
-        let sigmaBackground = backgroundRadius > 0
-            ? backgroundRadius / GaussianKernel.sigmaToRadiusFactor
-            : 0.0
-
         let baseSigma = layer.glow.radius / GaussianKernel.sigmaToRadiusFactor
-        let sigmas = GlowPSF.components.map { baseSigma * $0.sigmaScale }
 
-        self.backgroundSigma = sigmaBackground
+        self.kind = layer.kind
         self.brightnessFloor = Float(layer.extraction.brightnessFloor)
-        self.componentSigmas = sigmas
-        // 明るさ応答を上げると、広い成分の重みを増やす。
-        // 明るい星は全成分が乗るのでハローが広がって強くなり、
-        // 暗い星はしきい値に届かず芯と内側だけなので変わらない。
-        // 芯の重みは動かさない（減らすと明るい星のピークまで落ちてしまう）。
-        self.componentWeights = GlowPSF.components.map {
-            Float($0.weight * (1.0 + layer.glow.brightnessResponse * $0.brightnessWeightBoost))
-        }
-        self.componentThresholds = GlowPSF.components.map {
-            Float(layer.glow.brightnessResponse * $0.brightnessThresholdScale)
-        }
         self.gain = Float(layer.glow.intensity * layer.opacity)
         self.blendMode = layer.blendMode
 
-        let backgroundKernelRadius = GaussianKernel.radius(sigma: sigmaBackground)
-        let glowKernelRadius = sigmas.map { GaussianKernel.radius(sigma: $0) }.max() ?? 0
+        switch layer.kind {
+        case .star:
+            let backgroundRadius = layer.extraction.backgroundRemoval
+            let sigmaBackground = backgroundRadius > 0
+                ? backgroundRadius / GaussianKernel.sigmaToRadiusFactor
+                : 0.0
 
-        // 背景推定 → ピーク検出 → グローの順に直列で掛かるので、半径を足し合わせる
-        self.apron = backgroundKernelRadius + StarPeakDetection.radius + glowKernelRadius
+            let sigmas = GlowPSF.components.map { baseSigma * $0.sigmaScale }
+
+            self.backgroundSigma = sigmaBackground
+            self.componentSigmas = sigmas
+            // 明るさ応答を上げると、広い成分の重みを増やす。
+            // 明るい星は全成分が乗るのでハローが広がって強くなり、
+            // 暗い星はしきい値に届かず芯と内側だけなので変わらない。
+            // 芯の重みは動かさない（減らすと明るい星のピークまで落ちてしまう）。
+            self.componentWeights = GlowPSF.components.map {
+                Float($0.weight * (1.0 + layer.glow.brightnessResponse * $0.brightnessWeightBoost))
+            }
+            self.componentThresholds = GlowPSF.components.map {
+                Float(layer.glow.brightnessResponse * $0.brightnessThresholdScale)
+            }
+
+            let backgroundKernelRadius = GaussianKernel.radius(sigma: sigmaBackground)
+            let glowKernelRadius = sigmas.map { GaussianKernel.radius(sigma: $0) }.max() ?? 0
+
+            // 背景推定 → ピーク検出 → グローの順に直列で掛かるので、半径を足し合わせる
+            self.apron = backgroundKernelRadius + StarPeakDetection.radius + glowKernelRadius
+
+        // PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+        case .area:
+            // 背景を減算しない。天の川の面としての明るさをそのまま光源にするため。
+            self.backgroundSigma = 0.0
+
+            // 単一ガウシアン。星用の 4 成分 PSF は芯（σ 0.25 倍）が重みの過半を占めるので、
+            // 面を広くにじませたいここで使うと芯ばかり強く出て広がらない。
+            self.componentSigmas = [baseSigma]
+            self.componentWeights = [1.0]
+            // 成分が 1 つなので、成分ごとのしきい値で形を変える余地がない（明るさ応答は効かない）。
+            self.componentThresholds = [0.0]
+
+            // 背景推定もピーク検出も行わないので、グローの畳み込みぶんだけでよい。
+            self.apron = GaussianKernel.radius(sigma: baseSigma)
+        }
     }
 
     /// 背景減算を行うか。

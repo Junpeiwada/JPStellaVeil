@@ -147,6 +147,11 @@ private struct LayerList: View {
                                 appState.addLayer(preset: preset)
                             }
                         }
+
+                        // PENDING(面グロー): 保留中のため UI からは追加させない。
+                        // 処理とテストは生かしてあるので、動作確認は環境変数
+                        // JPSTELLAVEIL_ADD_AREA_GLOW から行える。
+                        // 経緯と再開手順は docs/アーカイブ/実装計画-面グロー.md
                     }
 
                     // ここは構成の置き換えではなく、現在の構成へ重ねる操作
@@ -273,7 +278,7 @@ private struct LayerRow: View {
                         .lineLimit(1)
                 }
 
-                Text("\(layer.blendMode.displayName) ・ \(Int((layer.opacity * 100).rounded()))%")
+                Text("\(layer.kind.displayName) ・ \(layer.blendMode.displayName) ・ \(Int((layer.opacity * 100).rounded()))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -290,6 +295,10 @@ private struct LayerInspector: View {
     @EnvironmentObject private var appState: AppState
 
     let layer: GlowLayer
+
+    // PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+    /// 面グローでは効かない設定があるので、種別で出し分ける。
+    private var isArea: Bool { layer.kind == .area }
 
     var body: some View {
         ScrollView {
@@ -330,40 +339,49 @@ private struct LayerInspector: View {
                         title: "強度",
                         value: layer.glow.intensity,
                         range: GlowParameters.intensityRange,
-                        defaultValue: 1.5,
+                        defaultValue: isArea ? 1.0 : 1.5,
                         format: { String(format: "%.2f", $0) },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.glow.intensity = newValue }
                         },
-                        explanation: "グローの明るさ。星の数は変わりません"
+                        explanation: isArea
+                            ? "天の川を持ち上げる強さ。上げすぎると明るい部分の階調が潰れます"
+                            : "グローの明るさ。星の数は変わりません"
                     )
 
                     ParameterSlider(
                         title: "半径",
                         value: layer.glow.radius,
                         range: GlowParameters.radiusRange,
-                        defaultValue: 20,
+                        defaultValue: isArea ? 120 : 20,
                         format: { "\(Int($0.rounded())) px" },
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.glow.radius = newValue }
                         },
-                        explanation: "ハローの広がり。広げすぎると星ではなく空が霞みます"
+                        explanation: isArea
+                            ? "にじみの広がり。天の川の幅に対して十分広ければ、これ以上広げても効果はほとんど変わりません"
+                            : "ハローの広がり。広げすぎると星ではなく空が霞みます"
                     )
 
-                    ParameterSlider(
-                        title: "明るさ応答",
-                        value: layer.glow.brightnessResponse,
-                        range: GlowParameters.brightnessResponseRange,
-                        defaultValue: 0.5,
-                        format: { String(format: "%.2f", $0) },
-                        onChange: { newValue in
-                            appState.updateLayer(id: layer.id) { $0.glow.brightnessResponse = newValue }
-                        },
-                        explanation: "明るい星ほどハローを大きくします。0 では明るさに関わらず同じ形のハローになります"
-                    )
+                    // 明るさ応答は 4 成分 PSF の配分を動かす設定なので、
+                    // 単一ガウシアンの面グローでは効かない
+                    if !isArea {
+                        ParameterSlider(
+                            title: "明るさ応答",
+                            value: layer.glow.brightnessResponse,
+                            range: GlowParameters.brightnessResponseRange,
+                            defaultValue: 0.5,
+                            format: { String(format: "%.2f", $0) },
+                            onChange: { newValue in
+                                appState.updateLayer(id: layer.id) { $0.glow.brightnessResponse = newValue }
+                            },
+                            explanation: "明るい星ほどハローを大きくします。0 では明るさに関わらず同じ形のハローになります"
+                        )
+                    }
 
-                    // 推奨範囲を超えたときだけ警告する（UI.md の要件）
-                    if layer.glow.isRadiusBeyondRecommendation {
+                    // 推奨範囲を超えたときだけ警告する（UI.md の要件）。
+                    // 面グローは広い半径が前提なので出さない
+                    if !isArea, layer.glow.isRadiusBeyondRecommendation {
                         Label(
                             "広げすぎると星ではなく空が霞みます",
                             systemImage: "exclamationmark.triangle"
@@ -373,26 +391,29 @@ private struct LayerInspector: View {
                     }
                 }
 
-                InspectorSection("星の抽出") {
-                    // 内部名は backgroundRemoval（実際に背景を引く処理）だが、
-                    // 利用者からは「どの大きさまでを星とみなすか」の設定に見える
-                    ParameterSlider(
-                        title: "星とみなす大きさ",
-                        value: layer.extraction.backgroundRemoval,
-                        range: StarExtractionParameters.backgroundRemovalRange,
-                        defaultValue: 12,
-                        format: { "\(Int($0.rounded())) px" },
-                        onChange: { newValue in
-                            appState.updateLayer(id: layer.id) { $0.extraction.backgroundRemoval = newValue }
-                        },
-                        explanation: "これより小さい構造を星とみなします。大きくすると天の川の淡い部分も対象になります。0 にすると空全体が光ってしまうので避けてください"
-                    )
+                InspectorSection(isArea ? "光らせる範囲" : "星の抽出") {
+                    // 背景を減算しない面グローでは効かない設定なので出さない
+                    if !isArea {
+                        // 内部名は backgroundRemoval（実際に背景を引く処理）だが、
+                        // 利用者からは「どの大きさまでを星とみなすか」の設定に見える
+                        ParameterSlider(
+                            title: "星とみなす大きさ",
+                            value: layer.extraction.backgroundRemoval,
+                            range: StarExtractionParameters.backgroundRemovalRange,
+                            defaultValue: 12,
+                            format: { "\(Int($0.rounded())) px" },
+                            onChange: { newValue in
+                                appState.updateLayer(id: layer.id) { $0.extraction.backgroundRemoval = newValue }
+                            },
+                            explanation: "これより小さい構造を星とみなします。大きくすると天の川の淡い部分も対象になります。0 にすると空全体が光ってしまうので避けてください"
+                        )
+                    }
 
                     ParameterSlider(
                         title: "明るさ下限",
                         value: layer.extraction.brightnessFloor,
                         range: StarExtractionParameters.brightnessFloorRange,
-                        defaultValue: 0.004,
+                        defaultValue: isArea ? 0.05 : 0.004,
                         format: { value in
                             value >= 0.1
                                 ? String(format: "%.2f", value)
@@ -401,14 +422,16 @@ private struct LayerInspector: View {
                         onChange: { newValue in
                             appState.updateLayer(id: layer.id) { $0.extraction.brightnessFloor = newValue }
                         },
-                        explanation: "これより暗い星を捨てます。小さい値はノイズ抑制、大きい値は明るい星だけに絞る用途です",
+                        explanation: isArea
+                            ? "これより暗いところは光りません。空の明るさのすぐ上に置くと、空は締めたまま天の川だけが持ち上がります。0 にすると空ごと浮いてかえって眠くなります"
+                            : "これより暗い星を捨てます。小さい値はノイズ抑制、大きい値は明るい星だけに絞る用途です",
                         // 0.001 付近と 0.5 付近を 1 本のスライダーで扱うため対数目盛りにする
                         scale: .logarithmic(minimum: 0.0002)
                     )
 
                     if let histogram = appState.starHistogram, histogram.totalSamples > 0 {
                         HStack {
-                            Text("拾う星の量")
+                            Text(isArea ? "光る面積" : "拾う星の量")
                             Spacer()
                             Text(String(
                                 format: "%.2f%%",

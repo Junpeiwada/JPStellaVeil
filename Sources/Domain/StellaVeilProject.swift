@@ -122,6 +122,26 @@ struct TIFFMetadataLedgerRecord: Codable, Equatable {
     var totalTagCount: Int
 }
 
+// PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+/// グローレイヤーの種別。
+///
+/// 星グローは背景を減算して点像だけを光源にするため、天の川の「面としての明るさ」は光らない。
+/// 面グローは背景を減算せず、天の川そのものを光源にする。
+/// 両者は処理の流れが違うので、パラメータではなく種別で分ける。
+enum GlowLayerKind: String, Codable, CaseIterable {
+    case star
+    case area
+
+    var displayName: String {
+        switch self {
+        case .star:
+            return "星グロー"
+        case .area:
+            return "面グロー"
+        }
+    }
+}
+
 struct GlowLayer: Codable, Equatable, Identifiable {
     let id: UUID
     var name: String
@@ -131,6 +151,46 @@ struct GlowLayer: Codable, Equatable, Identifiable {
     var glow: GlowParameters
     var extraction: StarExtractionParameters
     var skyMask: SkyMaskState
+
+    /// レイヤーの種別。畳み込みの前段（背景減算と明るさ下限の効かせ方）がこれで変わる。
+    var kind: GlowLayerKind
+
+    init(
+        id: UUID,
+        name: String,
+        isVisible: Bool,
+        blendMode: BlendMode,
+        opacity: Double,
+        glow: GlowParameters,
+        extraction: StarExtractionParameters,
+        skyMask: SkyMaskState,
+        kind: GlowLayerKind = .star
+    ) {
+        self.id = id
+        self.name = name
+        self.isVisible = isVisible
+        self.blendMode = blendMode
+        self.opacity = opacity
+        self.glow = glow
+        self.extraction = extraction
+        self.skyMask = skyMask
+        self.kind = kind
+    }
+
+    /// 種別は後から追加したため、無いときは従来どおり星グローとして読む。
+    /// 保存済みのプロジェクトとプリセットを移行なしで開けるようにするための処置。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.isVisible = try container.decode(Bool.self, forKey: .isVisible)
+        self.blendMode = try container.decode(BlendMode.self, forKey: .blendMode)
+        self.opacity = try container.decode(Double.self, forKey: .opacity)
+        self.glow = try container.decode(GlowParameters.self, forKey: .glow)
+        self.extraction = try container.decode(StarExtractionParameters.self, forKey: .extraction)
+        self.skyMask = try container.decode(SkyMaskState.self, forKey: .skyMask)
+        self.kind = try container.decodeIfPresent(GlowLayerKind.self, forKey: .kind) ?? .star
+    }
 
     static func makeDefault(name: String) -> GlowLayer {
         GlowLayer(
@@ -142,6 +202,31 @@ struct GlowLayer: Codable, Equatable, Identifiable {
             glow: .init(intensity: 1.5, radius: 20, brightnessResponse: 0.5),
             extraction: .init(backgroundRemoval: 12, brightnessFloor: 0.004),
             skyMask: .init(isAutoEnabled: true, horizonY: nil, featherRadius: 60)
+        )
+    }
+
+    // PENDING(面グロー): 保留中。既定の明るさ下限は未現像 TIFF に対して高すぎることが分かっている。
+    // docs/アーカイブ/実装計画-面グロー.md の P4-1 参照
+    /// 面グロー（天の川）の既定値。
+    ///
+    /// 背景減算をしないので `backgroundRemoval` は使わない。`brightnessResponse` も、
+    /// PSF が単一成分なので効かない（どちらも面グローでは UI から隠す）。
+    ///
+    /// 明るさ下限が要になる。下限なしでは空まで一緒に浮いて、
+    /// かえって天の川と空のコントラストが落ちる。空の地明かり付近に置くと天の川だけが持ち上がる。
+    /// 実測（リニア、空 0.057 / 天の川 0.134 の写真）では、下限 0 で天の川/空の比が 2.35 → 2.25 へ低下、
+    /// 下限 0.05 前後で 2.75 へ上昇した。半径は 40px 相当より広げても効果がほぼ変わらないため控えめにする。
+    static func makeAreaDefault(name: String) -> GlowLayer {
+        GlowLayer(
+            id: UUID(),
+            name: name,
+            isVisible: true,
+            blendMode: .screen,
+            opacity: 0.5,
+            glow: .init(intensity: 1.0, radius: 120, brightnessResponse: 0.0),
+            extraction: .init(backgroundRemoval: 0, brightnessFloor: 0.05),
+            skyMask: .init(isAutoEnabled: true, horizonY: nil, featherRadius: 60),
+            kind: .area
         )
     }
 
@@ -170,7 +255,8 @@ struct GlowLayer: Codable, Equatable, Identifiable {
             opacity: opacity,
             glow: glow,
             extraction: extraction,
-            skyMask: skyMask
+            skyMask: skyMask,
+            kind: kind
         )
     }
 }

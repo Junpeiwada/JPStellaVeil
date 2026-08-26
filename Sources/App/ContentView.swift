@@ -438,6 +438,10 @@ private struct StatusBar: View {
                 Label("ExifTool 未検出", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .help(
+                        "書き出し時のメタデータ補完と検証は行われません。"
+                            + ExifToolRunner.installGuidance
+                    )
             }
         }
         .padding(.horizontal, 12)

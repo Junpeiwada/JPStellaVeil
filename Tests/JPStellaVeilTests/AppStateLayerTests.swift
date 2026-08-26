@@ -97,4 +97,31 @@ final class AppStateLayerTests: XCTestCase {
         XCTAssertTrue(state.project.layers.isEmpty)
         XCTAssertNil(state.selectedLayerID)
     }
+
+    // MARK: - 面グロー
+
+    func testAddAreaLayerSelectsItAndKeepsAppliedPreset() {
+        let state = AppState()
+
+        // 先に組み込みプリセットを 1 枚入れて、適用中プリセットを立てておく
+        state.addLayer(preset: .standard)
+        let appliedBefore = state.project.appliedPresetID
+
+        state.addAreaLayer()
+
+        XCTAssertEqual(state.project.layers.count, 2)
+        XCTAssertEqual(state.selectedLayer?.kind, .area)
+
+        // 面グローは組み込みプリセットに対応する構成ではないので、適用中プリセットは動かさない
+        XCTAssertEqual(state.project.appliedPresetID, appliedBefore)
+    }
+
+    func testAddAreaLayerRequestsPreviewUpdate() {
+        let state = AppState()
+        let before = state.previewUpdateGeneration
+
+        state.addAreaLayer()
+
+        XCTAssertGreaterThan(state.previewUpdateGeneration, before)
+    }
 }

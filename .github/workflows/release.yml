@@ -1,0 +1,174 @@
+name: Release
+
+# タグ `v*`（例: v1.0.0）push でリリースを発行する。手動実行も可（バージョンを入力）。
+# 発火は Tools/release.sh から行う（npm run release）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "リリースバージョン（例: 1.0.0）。タグ push 時は不要。"
+        required: false
+
+permissions:
+  contents: write   # gh release 作成に必要
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    env:
+      SCHEME: JPStellaVeil
+      PROJECT: JPStellaVeil.xcodeproj
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: バージョン / タグを決定
+        id: vars
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "::error::バージョンを決定できません（タグ push か workflow_dispatch の version 入力が必要）"
+            exit 1
+          fi
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # ビルド番号は単調増加する run 番号を使う。
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "リリース: ${TAG} (version=${VERSION}, build=${{ github.run_number }})"
+
+      - name: Xcode を選択
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: XcodeGen を導入
+        run: brew install xcodegen
+
+      - name: Xcode プロジェクトを生成
+        run: xcodegen generate
+
+      - name: Developer ID 証明書をインポート
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          p12-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+
+      - name: アーカイブ（Developer ID 署名）
+        run: |
+          set -euo pipefail
+          # Team ID と entitlements は project.yml に書いてあるので、ここでは渡さない。
+          xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/${SCHEME}.xcarchive \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            MARKETING_VERSION="${{ steps.vars.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.vars.outputs.build }}"
+
+      - name: アーカイブをエクスポート（.app 取得）
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/${SCHEME}.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist Tools/Release/ExportOptions.plist
+
+          echo "署名の内容:"
+          codesign -dv --verbose=4 "build/export/${SCHEME}.app" 2>&1
+
+          # Hardened Runtime が付いていない .app は公証を通れないので、ここで落とす。
+          codesign -dv "build/export/${SCHEME}.app" 2>&1 \
+            | grep -q "flags=.*runtime" \
+            || { echo "::error::Hardened Runtime が有効になっていません"; exit 1; }
+
+      - name: 公証用の API キーを書き出す
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          echo -n "${ASC_API_KEY_P8}" | base64 --decode > build/AuthKey.p8
+          chmod 600 build/AuthKey.p8
+
+      - name: アプリを公証（ステープルまで）
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          # DMG より先に .app 自体へチケットを埋める。こうしておかないと、
+          # DMG から取り出したアプリをオフラインで初起動したときに弾かれる。
+          Tools/Release/notarize.sh \
+            "build/export/${SCHEME}.app" \
+            build/AuthKey.p8 \
+            "${ASC_KEY_ID}" \
+            "${ASC_ISSUER_ID}"
+
+      - name: DMG を作成
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          DMG="${SCHEME}-${{ steps.vars.outputs.version }}.dmg"
+          Tools/Release/make_dmg.sh "build/export/${SCHEME}.app" "dist/${DMG}"
+          codesign --force --sign "Developer ID Application" --timestamp "dist/${DMG}"
+          echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+          ls -la dist
+
+      - name: DMG を公証（ステープルまで）
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          Tools/Release/notarize.sh \
+            "dist/${{ steps.pack.outputs.dmg }}" \
+            build/AuthKey.p8 \
+            "${ASC_KEY_ID}" \
+            "${ASC_ISSUER_ID}"
+
+      - name: API キーを消す
+        if: always()
+        run: rm -f build/AuthKey.p8
+
+      - name: 配布物を検証
+        run: |
+          set -euo pipefail
+          DMG="dist/${{ steps.pack.outputs.dmg }}"
+
+          # ダウンロードしたユーザーと同じ判定を再現する。
+          # "source=Notarized Developer ID" が出れば警告なしに起動できる。
+          spctl -a -t open --context context:primary-signature -vv "$DMG"
+
+          MOUNT_POINT="$RUNNER_TEMP/dmg-check"
+          hdiutil attach -nobrowse -readonly "$DMG" -mountpoint "$MOUNT_POINT" > /dev/null
+          spctl -a -vv "$MOUNT_POINT/${SCHEME}.app"
+          xcrun stapler validate "$MOUNT_POINT/${SCHEME}.app"
+          hdiutil detach "$MOUNT_POINT" > /dev/null
+
+      - name: GitHub Release を作成（DMG 添付）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.vars.outputs.tag }}" \
+            "dist/${{ steps.pack.outputs.dmg }}" \
+            --title "${SCHEME} ${{ steps.vars.outputs.version }}" \
+            --notes-file Tools/Release/RELEASE_NOTES.md \
+            --generate-notes

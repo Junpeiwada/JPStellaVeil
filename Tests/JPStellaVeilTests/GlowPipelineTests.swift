@@ -677,4 +677,87 @@ final class GlowPipelineTests: XCTestCase {
         XCTAssertEqual(image.bitsPerPixel, 64)
         XCTAssertEqual(image.colorSpace?.name, CGColorSpace.linearSRGB)
     }
+
+    // MARK: - 面グロー
+
+    /// 面グロー用のレイヤー。半径を小さくして計算量を抑える。
+    private func makeAreaTestLayer(radius: Double = 12, brightnessFloor: Double = 0.0) -> GlowLayer {
+        var layer = GlowLayer.makeAreaDefault(name: "面グロー")
+        layer.glow.radius = radius
+        layer.glow.intensity = 1.0
+        layer.opacity = 1.0
+        layer.extraction.brightnessFloor = brightnessFloor
+        return layer
+    }
+
+    /// 面グローは一様な明るい面も持ち上げる。
+    /// 星グローは背景減算で一様面が消える（`testUniformImageStaysUnchanged`）ので、ここが両者の違い。
+    func testAreaGlowBrightensUniformField() throws {
+        let pipeline = try makePipeline()
+        let width = 96
+        let height = 96
+        let level: Float = 0.25
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { _, _ in
+            level
+        }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        try pipeline.process(original: input, output: output, layers: [makeAreaTestLayer()])
+
+        let result = readValues(from: output, pipeline: pipeline)
+
+        XCTAssertGreaterThan(
+            result[(height / 2) * width + width / 2],
+            level + 0.05,
+            "面グローで一様な面が持ち上がっていない"
+        )
+    }
+
+    /// 明るさ下限より暗い面は光源にならない。
+    /// これが無いと空まで一緒に浮いて、天の川とのコントラストがかえって落ちる。
+    func testAreaGlowFloorExcludesDimField() throws {
+        let pipeline = try makePipeline()
+        let width = 96
+        let height = 96
+        let level: Float = 0.10
+
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { _, _ in
+            level
+        }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        try pipeline.process(
+            original: input,
+            output: output,
+            layers: [makeAreaTestLayer(brightnessFloor: 0.2)]
+        )
+
+        for value in readValues(from: output, pipeline: pipeline) {
+            XCTAssertEqual(value, level, accuracy: 0.002)
+        }
+    }
+
+    /// 明るい面の光が、面の外側（暗い側）へにじむ。
+    func testAreaGlowSpreadsBeyondBrightBand() throws {
+        let pipeline = try makePipeline()
+        let width = 128
+        let height = 64
+        let edge = width / 2
+
+        // 左半分だけ明るい
+        let input = try makeInputTexture(device: pipeline.device, width: width, height: height) { x, _ in
+            x < edge ? 0.4 : 0.0
+        }
+        let output = try pipeline.makeOutputTexture(width: width, height: height)
+
+        try pipeline.process(original: input, output: output, layers: [makeAreaTestLayer(radius: 12)])
+
+        let result = readValues(from: output, pipeline: pipeline)
+        func value(_ x: Int, _ y: Int) -> Float { result[y * width + x] }
+        let row = height / 2
+
+        XCTAssertGreaterThan(value(edge + 2, row), 0.0, "面の外へにじんでいない")
+        XCTAssertGreaterThan(value(edge + 2, row), value(edge + 10, row))
+    }
 }

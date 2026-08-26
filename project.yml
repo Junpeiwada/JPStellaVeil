@@ -6,8 +6,12 @@ options:
 settings:
   base:
     SWIFT_VERSION: 5.10
-    PRODUCT_BUNDLE_IDENTIFIER: com.example.jpstellaveil
     GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: 1
+    # テストバンドルはホストアプリへ読み込まれる。Hardened Runtime 下では
+    # Team ID が一致していないと拒否されるので、全ターゲットに効かせる。
+    DEVELOPMENT_TEAM: L897K2C26B
 packages: {}
 targets:
   JPStellaVeil:
@@ -15,11 +19,21 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+        excludes:
+          - JPStellaVeil.entitlements
       - path: Scripts
         buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: JPStellaVeil
+        PRODUCT_BUNDLE_IDENTIFIER: com.junpeiwada.JPStellaVeil
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # 公証（notarization）には Hardened Runtime が必須。
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Sources/JPStellaVeil.entitlements
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Junpei Wada. All rights reserved."
+        # Photoshop を操作する際にシステムが表示する許可ダイアログの文面。
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: "空マスクを生成するために Adobe Photoshop を操作します。"
     scheme:
       testTargets:
         - JPStellaVeilTests
@@ -32,4 +46,4 @@ targets:
       - target: JPStellaVeil
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.jpstellaveil.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.junpeiwada.JPStellaVeil.tests

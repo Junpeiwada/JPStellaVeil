@@ -340,6 +340,39 @@ kernel void applyStarFloor(
     destination.write(float4(applyBrightnessGate(value, reference, params.threshold), 1.0), gid);
 }
 
+// PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+/// 面グローの明るさ下限を適用する。
+///
+/// 星グローと違い、判定も減算も画素ごとに行う。相手が天の川のような広い面なので、
+/// 近傍ピークを見て「星を周辺ごと残す」必要がない。
+///
+/// ゲートするだけでなく下限を引くのは、空の地明かりを光源から外すため。
+/// 引かずに通すと空全体が同じだけ持ち上がり、天の川と空のコントラストはかえって落ちる。
+kernel void applyAreaFloor(
+    texture2d<float, access::read> source [[texture(0)]],
+    texture2d<float, access::write> destination [[texture(1)]],
+    constant GlowTileParams &params [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (isOutsideRegion(gid, params)) {
+        return;
+    }
+
+    float3 color = max(source.read(gid).rgb, 0.0);
+    float threshold = params.threshold;
+
+    if (threshold <= 0.0) {
+        destination.write(float4(color, 1.0), gid);
+        return;
+    }
+
+    // 色ごとに切ると下限のすぐ上で色が転ぶので、明るさで一括に判定する
+    float luminance = max(max(color.r, color.g), color.b);
+    float gate = smoothstep(threshold, threshold * 1.5, luminance);
+
+    destination.write(float4(max(color - threshold, 0.0) * gate, 1.0), gid);
+}
+
 /// グローを合成先へ重ねる。
 ///
 /// 不透明度はゲインへ畳み込んである（Screen も Add も

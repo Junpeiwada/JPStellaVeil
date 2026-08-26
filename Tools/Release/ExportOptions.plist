@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store ではなく、Developer ID による直接配布。 -->
+	<key>method</key>
+	<string>developer-id</string>
+
+	<key>teamID</key>
+	<string>L897K2C26B</string>
+
+	<!-- CI では証明書を一時キーチェーンへ入れてから署名するので、
+	     Xcode の自動署名（App Store Connect への問い合わせが要る）は使わない。 -->
+	<key>signingStyle</key>
+	<string>manual</string>
+
+	<key>signingCertificate</key>
+	<string>Developer ID Application</string>
+
+	<!-- 公証はこの後 notarytool で別途行うため、ここでは書き出しのみ。 -->
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

@@ -4,6 +4,8 @@
 
 # Xcode
 build/
+dd/
+dist/
 DerivedData/
 *.xcuserstate
 xcuserdata/
@@ -20,3 +22,7 @@ xcuserdata/
 .build/
 .swiftpm/
 Package.resolved
+
+# npm（開発補助スクリプト用の package.json のみ。依存は入れない）
+node_modules/
+package-lock.json

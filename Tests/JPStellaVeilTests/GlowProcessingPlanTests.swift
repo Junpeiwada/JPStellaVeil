@@ -339,4 +339,53 @@ final class GlowProcessingPlanTests: XCTestCase {
         flag.cancel()
         XCTAssertTrue(flag.isCancelled)
     }
+
+    // MARK: - レイヤー種別による分岐
+
+    /// 面グローは背景を減算せず、単一ガウシアンで畳み込む。
+    func testAreaGlowSpecSkipsBackgroundAndUsesSingleComponent() {
+        var layer = GlowLayer.makeAreaDefault(name: "面グロー")
+        layer.glow.radius = 60
+
+        // 面グローでは使わない値。設定されていても無視されること
+        layer.extraction.backgroundRemoval = 30
+        layer.glow.brightnessResponse = 1.0
+
+        let spec = GlowLayerProcessingSpec(layer: layer)
+        let sigma = 60 / GaussianKernel.sigmaToRadiusFactor
+
+        XCTAssertEqual(spec.kind, .area)
+        XCTAssertFalse(spec.subtractsBackground)
+        XCTAssertEqual(spec.backgroundSigma, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(spec.componentSigmas.count, 1)
+        XCTAssertEqual(spec.componentSigmas[0], sigma, accuracy: 1e-9)
+        XCTAssertEqual(spec.componentWeights, [1.0])
+        XCTAssertEqual(spec.componentThresholds, [0.0])
+
+        // 背景推定もピーク検出も無いぶん、マージンはグローの畳み込みだけで済む
+        XCTAssertEqual(spec.apron, GaussianKernel.radius(sigma: sigma))
+    }
+
+    /// 星グローは従来どおり 4 成分・背景減算あり（既存挙動の回帰）。
+    func testStarGlowSpecKeepsFourComponents() {
+        let layer = GlowLayer.makeDefault(name: "星グロー")
+        let spec = GlowLayerProcessingSpec(layer: layer)
+
+        XCTAssertEqual(spec.kind, .star)
+        XCTAssertTrue(spec.subtractsBackground)
+        XCTAssertEqual(spec.componentSigmas.count, GlowPSF.components.count)
+
+        // 背景推定とピーク検出のぶん、マージンはグロー単体より広い
+        let glowRadius = spec.componentSigmas.map { GaussianKernel.radius(sigma: $0) }.max() ?? 0
+        XCTAssertGreaterThan(spec.apron, glowRadius)
+    }
+
+    /// 種別を変えたら畳み込みをやり直す必要がある。
+    func testConvolutionKeyDistinguishesLayerKind() {
+        let star = GlowLayer.makeDefault(name: "レイヤー")
+        var area = star
+        area.kind = .area
+
+        XCTAssertNotEqual(GlowConvolutionKey(layer: star), GlowConvolutionKey(layer: area))
+    }
 }

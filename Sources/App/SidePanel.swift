@@ -104,6 +104,19 @@ struct InfoPane: View {
                 }
             }
 
+            if !appState.isExifToolAvailable {
+                Section("メタデータ検証") {
+                    Text("ExifTool が見つからないため、書き出し時のメタデータ補完と検証は行われません。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+
+                    Text(ExifToolRunner.installGuidance)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+
             if let verification = appState.lastMetadataVerification {
                 Section("メタデータ検証") {
                     LabeledContent(

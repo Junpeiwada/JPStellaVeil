@@ -172,6 +172,7 @@ final class GlowPipeline {
         case clearAccumulator
         case extractStars
         case applyStarFloor
+        case applyAreaFloor
         case compositeGlow
         case writeTileOutput
         case writeTileOutputUnclamped
@@ -805,42 +806,59 @@ final class GlowPipeline {
             height: regionHeight
         )
 
-        // 3. 明るさ下限を星単位で適用する。
-        //    判定には星成分を少しぼかしたものを使い、星の中心が明るければ
-        //    その星を周辺の淡い部分ごと残す。画素ごとに切ると星が痩せる。
-        params.radius = Int32(peakWeights.radius)
+        // 3. 明るさ下限を適用する。効かせ方は種別で変える。
+        params.threshold = spec.brightnessFloor
         params.componentThreshold = 0
 
-        dispatch(
-            encoder: encoder,
-            kernel: .blurHorizontal,
-            textures: [star, gated],
-            params: &params,
-            weights: peakWeights.buffer,
-            width: regionWidth,
-            height: regionHeight
-        )
+        switch spec.kind {
+        case .star:
+            //    判定には星成分を少しぼかしたものを使い、星の中心が明るければ
+            //    その星を周辺の淡い部分ごと残す。画素ごとに切ると星が痩せる。
+            params.radius = Int32(peakWeights.radius)
 
-        dispatch(
-            encoder: encoder,
-            kernel: .blurVertical,
-            textures: [gated, peak],
-            params: &params,
-            weights: peakWeights.buffer,
-            width: regionWidth,
-            height: regionHeight
-        )
+            dispatch(
+                encoder: encoder,
+                kernel: .blurHorizontal,
+                textures: [star, gated],
+                params: &params,
+                weights: peakWeights.buffer,
+                width: regionWidth,
+                height: regionHeight
+            )
 
-        params.threshold = spec.brightnessFloor
-        dispatch(
-            encoder: encoder,
-            kernel: .applyStarFloor,
-            textures: [star, peak, gated],
-            params: &params,
-            weights: nil,
-            width: regionWidth,
-            height: regionHeight
-        )
+            dispatch(
+                encoder: encoder,
+                kernel: .blurVertical,
+                textures: [gated, peak],
+                params: &params,
+                weights: peakWeights.buffer,
+                width: regionWidth,
+                height: regionHeight
+            )
+
+            dispatch(
+                encoder: encoder,
+                kernel: .applyStarFloor,
+                textures: [star, peak, gated],
+                params: &params,
+                weights: nil,
+                width: regionWidth,
+                height: regionHeight
+            )
+
+        // PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+        case .area:
+            //    面が相手なので近傍ピークは要らない。画素ごとに下限を引いて通す。
+            dispatch(
+                encoder: encoder,
+                kernel: .applyAreaFloor,
+                textures: [star, gated],
+                params: &params,
+                weights: nil,
+                width: regionWidth,
+                height: regionHeight
+            )
+        }
 
         // 4. 4 成分 PSF でグローを作る
         var accumulatorIndex = 0

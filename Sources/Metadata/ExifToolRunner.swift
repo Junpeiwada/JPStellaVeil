@@ -10,7 +10,7 @@ enum ExifToolError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
-            return "ExifTool が見つかりません。同梱バイナリまたは PATH 上の exiftool を用意してください。"
+            return "ExifTool が見つかりません。\(ExifToolRunner.installGuidance)"
         case .launchFailed(let message):
             return "ExifTool の起動に失敗しました: \(message)"
         case .nonZeroExit(let code, let message):
@@ -45,6 +45,11 @@ struct ExifToolMetadata: Equatable {
 
 /// 同梱またはシステムの ExifTool を実行するラッパー。
 final class ExifToolRunner {
+    /// ExifTool が無いときに UI へ出す導入案内。
+    /// 表示箇所が複数あるので文言を一箇所に集めておく。
+    static let installGuidance =
+        "ターミナルで brew install exiftool を実行するか、PATH 上に exiftool を置いてください。"
+
     /// 実行ファイル探索の候補順。
     /// 1. 明示指定パス
     /// 2. アプリバンドル同梱（Phase 7 で同梱・署名運用に移行）

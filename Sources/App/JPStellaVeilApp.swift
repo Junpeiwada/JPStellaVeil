@@ -47,6 +47,19 @@ struct JPStellaVeilApp: App {
                 appState.addLayer(preset: preset)
             }
 
+            // PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+            // 動作確認用: 面グロー（天の川）レイヤーを追加する（UI からは追加できない）
+            if ProcessInfo.processInfo.environment["JPSTELLAVEIL_ADD_AREA_GLOW"] == "1" {
+                appState.addAreaLayer()
+
+                // 動作確認用: 明るさ下限を上書きする。既定値の見比べに使う
+                if let text = ProcessInfo.processInfo.environment["JPSTELLAVEIL_AREA_FLOOR"],
+                   let floor = Double(text),
+                   let layerID = appState.selectedLayerID {
+                    appState.updateLayer(id: layerID) { $0.extraction.brightnessFloor = floor }
+                }
+            }
+
             // 動作確認用: そのままフル解像度処理まで走らせる（JPSTELLAVEIL_AUTO_APPLY=1）
             if ProcessInfo.processInfo.environment["JPSTELLAVEIL_AUTO_APPLY"] == "1" {
                 appState.applyGlow()

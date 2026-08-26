@@ -47,6 +47,7 @@ final class AppState: ObservableObject {
 
     private struct HistogramKey: Equatable {
         let layerID: UUID
+        let kind: GlowLayerKind
         let backgroundRemoval: Double
     }
 
@@ -113,6 +114,12 @@ final class AppState: ObservableObject {
     private let tiffService: TIFFImageIOService
     private let metadataService: MetadataVerificationService
 
+    /// ExifTool が使えるか。UI のボタン活性判定と未検出の案内表示に使う。
+    ///
+    /// 起動時に一度だけ調べた結果を保持する。判定はファイルシステムを
+    /// 何度も探索するので、View の再描画ごとに呼ぶわけにはいかない。
+    let isExifToolAvailable: Bool
+
     /// 保存済みプリセットの置き場。
     let presetStore: GlowPresetStore
 
@@ -124,6 +131,7 @@ final class AppState: ObservableObject {
         self.project = project
         self.tiffService = TIFFImageIOService()
         self.metadataService = metadataService
+        self.isExifToolAvailable = metadataService.isExifToolAvailable
         self.presetStore = presetStore
 
         do {
@@ -158,11 +166,6 @@ final class AppState: ObservableObject {
             processingController = nil
             lastStatusMessage = error.localizedDescription
         }
-    }
-
-    /// ExifTool が利用可能か。UI のボタン活性判定に使う。
-    var isExifToolAvailable: Bool {
-        metadataService.isExifToolAvailable
     }
 
     /// TIFF を開く。読み込みはバックグラウンドで行う。
@@ -329,6 +332,25 @@ final class AppState: ObservableObject {
         if wasEmpty {
             project.appliedPresetID = preset.presetID
         }
+
+        selectedLayerID = layer.id
+        lastStatusMessage = "レイヤーを追加しました: \(layer.name)"
+        requestPreviewUpdate()
+    }
+
+    // PENDING(面グロー): 保留中。docs/アーカイブ/実装計画-面グロー.md 参照
+    /// 面グロー（天の川）レイヤーを追加し、選択状態にする。
+    ///
+    /// 組み込みプリセットに対応する構成ではないので、`appliedPresetID` は動かさない。
+    func addAreaLayer() {
+        let maximum = processingController?.maximumLayerCount ?? GlowPipeline.maximumLayerCount
+        guard project.layers.count < maximum else {
+            lastStatusMessage = "レイヤーは \(maximum) 枚までです"
+            return
+        }
+
+        let layer = GlowLayer.makeAreaDefault(name: GlowLayerKind.area.displayName)
+        project.addLayer(layer)
 
         selectedLayerID = layer.id
         lastStatusMessage = "レイヤーを追加しました: \(layer.name)"
@@ -555,6 +577,7 @@ final class AppState: ObservableObject {
 
         let key = HistogramKey(
             layerID: layer.id,
+            kind: layer.kind,
             backgroundRemoval: layer.extraction.backgroundRemoval
         )
         guard key != histogramKey else { return }
@@ -865,7 +888,8 @@ final class AppState: ObservableObject {
 
             guard metadataService.isExifToolAvailable else {
                 lastMetadataVerification = nil
-                lastStatusMessage = "書き出し済み（ExifTool が無いためメタデータ検証は未実施）: \(outputURL.lastPathComponent)"
+                lastStatusMessage = "書き出し済み（ExifTool が無いためメタデータ検証は未実施）: "
+                    + "\(outputURL.lastPathComponent)。\(ExifToolRunner.installGuidance)"
                 return
             }
 
