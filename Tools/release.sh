@@ -137,9 +137,15 @@ else
 fi
 
 # --- 3. コミット ---
+# 初回リリースや、先にバージョンを上げてあった場合は差分が出ない。
+# その状態で git commit すると失敗して止まるので、変更があるときだけコミットする。
 git add "${PROJECT_YML}"
-git commit -m "${TAG} へバージョンを上げる"
-echo "→ project.yml をコミットしました。"
+if git diff --cached --quiet; then
+  echo "→ ${PROJECT_YML} に変更がないため、コミットはスキップします（バージョン据え置き）。"
+else
+  git commit -m "${TAG} へバージョンを上げる"
+  echo "→ project.yml をコミットしました。"
+fi
 
 # --- 4. タグを打って push ---
 git tag "${TAG}"
