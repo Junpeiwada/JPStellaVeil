@@ -23,6 +23,12 @@ xcuserdata/
 .swiftpm/
 Package.resolved
 
+# Sparkle / リリース時の中間生成物（CI が作る）
+sparkle-tools/
+sparkle-feed/
+sparkle.tar.xz
+pages/
+
 # npm（開発補助スクリプト用の package.json のみ。依存は入れない）
 node_modules/
 package-lock.json

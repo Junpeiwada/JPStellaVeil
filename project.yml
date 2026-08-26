@@ -12,7 +12,11 @@ settings:
     # テストバンドルはホストアプリへ読み込まれる。Hardened Runtime 下では
     # Team ID が一致していないと拒否されるので、全ターゲットに効かせる。
     DEVELOPMENT_TEAM: L897K2C26B
-packages: {}
+packages:
+  # アプリ内自動更新フレームワーク。GitHub Pages の appcast を参照して更新する。
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.6"
 targets:
   JPStellaVeil:
     type: application
@@ -23,6 +27,9 @@ targets:
           - JPStellaVeil.entitlements
       - path: Scripts
         buildPhase: resources
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
     settings:
       base:
         PRODUCT_NAME: JPStellaVeil
@@ -31,9 +38,29 @@ targets:
         # 公証（notarization）には Hardened Runtime が必須。
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Sources/JPStellaVeil.entitlements
-        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Junpei Wada. All rights reserved."
+        # 下の info ブロックで実 Info.plist を生成するため、自動生成は使わない。
+        GENERATE_INFOPLIST_FILE: NO
+    # Sparkle の任意キー（SUFeedURL/SUPublicEDKey）は INFOPLIST_KEY_* では注入できないため、
+    # 実 Info.plist を XcodeGen で生成する。設定変更時は project.yml を編集して再生成すること。
+    info:
+      path: JPStellaVeil-Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        LSApplicationCategoryType: public.app-category.photography
+        NSHumanReadableCopyright: "Copyright © 2026 Junpei Wada. All rights reserved."
         # Photoshop を操作する際にシステムが表示する許可ダイアログの文面。
-        INFOPLIST_KEY_NSAppleEventsUsageDescription: "空マスクを生成するために Adobe Photoshop を操作します。"
+        NSAppleEventsUsageDescription: "空マスクを生成するために Adobe Photoshop を操作します。"
+        # Sparkle: 更新フィード（GitHub Pages でホストする appcast）
+        SUFeedURL: "https://junpeiwada.github.io/JPStellaVeil/appcast.xml"
+        # Sparkle: appcast 署名検証用の EdDSA 公開鍵。
+        # 公開鍵なのでリポジトリに含めてよい。対応する秘密鍵はキーチェーンに保存され、
+        # CI 署名用に Secret SPARKLE_PRIVATE_KEY へ登録してある。
+        SUPublicEDKey: "WiyUPbS5LnynuM2+J8Z/n+nRIhbjDpwtD/rbmcWeGVg="
+        # 起動時に自動で更新確認（既定 ON、間隔 24h）。ユーザーはメニューから切替可能。
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
     scheme:
       testTargets:
         - JPStellaVeilTests

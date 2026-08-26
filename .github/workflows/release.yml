@@ -120,15 +120,26 @@ jobs:
             "${ASC_KEY_ID}" \
             "${ASC_ISSUER_ID}"
 
-      - name: DMG を作成
+      - name: 配布物（DMG / zip）を作成
         id: pack
         run: |
           set -euo pipefail
-          mkdir -p dist
-          DMG="${SCHEME}-${{ steps.vars.outputs.version }}.dmg"
+          mkdir -p dist sparkle-feed
+          VERSION="${{ steps.vars.outputs.version }}"
+
+          # 人が手で入れる用。Applications へのドラッグ導線を持つ。
+          DMG="${SCHEME}-${VERSION}.dmg"
           Tools/Release/make_dmg.sh "build/export/${SCHEME}.app" "dist/${DMG}"
           codesign --force --sign "Developer ID Application" --timestamp "dist/${DMG}"
+
+          # Sparkle の自動更新用。.app は既に公証・ステープル済みなので固めるだけでよい。
+          ZIP="${SCHEME}-${VERSION}.zip"
+          /usr/bin/ditto -c -k --keepParent "build/export/${SCHEME}.app" "dist/${ZIP}"
+          # appcast は zip だけを対象にする（DMG が混ざると両方がエントリになる）。
+          cp "dist/${ZIP}" "sparkle-feed/${ZIP}"
+
           echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+          echo "zip=${ZIP}" >> "$GITHUB_OUTPUT"
           ls -la dist
 
       - name: DMG を公証（ステープルまで）
@@ -162,13 +173,46 @@ jobs:
           xcrun stapler validate "$MOUNT_POINT/${SCHEME}.app"
           hdiutil detach "$MOUNT_POINT" > /dev/null
 
-      - name: GitHub Release を作成（DMG 添付）
+      - name: GitHub Release を作成（DMG / zip 添付）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh release create "${{ steps.vars.outputs.tag }}" \
             "dist/${{ steps.pack.outputs.dmg }}" \
+            "dist/${{ steps.pack.outputs.zip }}" \
             --title "${SCHEME} ${{ steps.vars.outputs.version }}" \
             --notes-file Tools/Release/RELEASE_NOTES.md \
             --generate-notes
+
+      - name: Sparkle ツールを取得
+        run: |
+          set -euo pipefail
+          curl -fL -o sparkle.tar.xz \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-2.9.6.tar.xz
+          mkdir -p sparkle-tools && tar -xf sparkle.tar.xz -C sparkle-tools
+          ls -la sparkle-tools/bin
+
+      - name: appcast.xml を生成（Release の zip へ向ける）
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${SPARKLE_PRIVATE_KEY}" > sparkle_priv.key
+          ./sparkle-tools/bin/generate_appcast sparkle-feed/ \
+            --ed-key-file sparkle_priv.key \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.tag }}/"
+          rm -f sparkle_priv.key
+
+          mkdir -p pages
+          cp sparkle-feed/appcast.xml pages/appcast.xml
+          cat pages/appcast.xml
+
+      - name: appcast を GitHub Pages へ publish
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./pages
+          # 将来ランディングページ（site/）を足すときのために既存ファイルは残す。
+          keep_files: true

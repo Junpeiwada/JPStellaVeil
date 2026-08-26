@@ -4,6 +4,9 @@ import SwiftUI
 struct JPStellaVeilApp: App {
     @StateObject private var appState = AppState()
 
+    /// アプリ内自動更新（Sparkle）。生成時に自動チェックを開始し、メニューから操作する。
+    @StateObject private var updater = UpdaterController()
+
     /// 起動オプションを適用したか。
     /// onAppear は複数回呼ばれることがあり、そのままだとレイヤーが二重に追加される。
     @State private var hasAppliedLaunchOptions = false
@@ -22,6 +25,17 @@ struct JPStellaVeilApp: App {
                 }
         }
         .windowStyle(.titleBar)
+        .commands {
+            // 「JPStellaVeil について」の直後、アプリメニューの上部に置く。
+            CommandGroup(after: .appInfo) {
+                Button("更新を確認…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+
+                Toggle("起動時に自動で更新を確認", isOn: $updater.automaticallyChecksForUpdates)
+            }
+        }
     }
 
     /// 起動時に開くファイルを環境変数 `JPSTELLAVEIL_OPEN_FILE` で指定できる。
