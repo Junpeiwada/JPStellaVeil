@@ -1,10 +1,15 @@
 #!/bin/bash
 # アプリアイコンを生成し、Assets.xcassets と .icns に展開する。
-#   使い方: Tools/AppIcon/build_icon.sh [バリアント]
-#   バリアント: A=ヴェールあり（採用） / B=ミニマル / C=小さな星あり
+#   使い方: Tools/AppIcon/build_icon.sh [元画像]
+#   元画像: AI 生成した 1024x1024 の正方形画像。指定するとマスター
+#           (AppIcon-1024.png) を作り直す。省略時は既存のマスターから
+#           各サイズを再展開するだけ。
+#
+# 元画像には生成時の角丸（角の黒み）が焼き込まれているため、
+# 端を 60px ずつクロップして除去してから、macOS 標準のアイコングリッド
+# （1024px 中、余白 100px・角丸半径 185px）でマスクし直す。
 set -euo pipefail
 
-VARIANT="${1:-A}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DIR="$ROOT/Tools/AppIcon"
 SET="$ROOT/Sources/Resources/Assets.xcassets/AppIcon.appiconset"
@@ -12,8 +17,29 @@ MASTER="$DIR/AppIcon-1024.png"
 
 command -v magick >/dev/null || { echo "ImageMagick (magick) が必要です" >&2; exit 1; }
 
-echo "==> マスター画像を生成 (variant $VARIANT)"
-swift "$DIR/gen_icon.swift" "$VARIANT" "$MASTER"
+if [ $# -ge 1 ]; then
+  SRC="$1"
+  [ -f "$SRC" ] || { echo "元画像が見つかりません: $SRC" >&2; exit 1; }
+
+  echo "==> マスター画像を生成 (source: $SRC)"
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+  # 端の焼き込み角丸を除去して 824x824 へ
+  magick "$SRC" -gravity center -crop 904x904+0+0 +repage \
+    -filter Lanczos -resize 824x824 "$TMP/square.png"
+  # macOS 標準の角丸マスク（4倍解像度で描いてから縮小し、エッジをアンチエイリアスする）
+  magick -size 3296x3296 xc:black -fill white \
+    -draw "roundrectangle 0,0,3295,3295,740,740" \
+    -filter Lanczos -resize 824x824 "$TMP/mask.png"
+  magick "$TMP/square.png" "$TMP/mask.png" \
+    -alpha off -compose CopyOpacity -composite "$TMP/rounded.png"
+  # 1024x1024 の透明キャンバス中央（余白 100px）に配置
+  magick -size 1024x1024 xc:none "$TMP/rounded.png" \
+    -gravity center -compose Over -composite "$MASTER"
+else
+  [ -f "$MASTER" ] || { echo "マスターがありません: $MASTER（元画像を引数で渡してください）" >&2; exit 1; }
+  echo "==> 既存のマスターを使用: $MASTER"
+fi
 
 echo "==> Assets.xcassets へ展開"
 rm -rf "$SET"

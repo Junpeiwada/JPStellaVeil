@@ -32,7 +32,7 @@ JPStellaVeil では `docs/` 配下のドキュメントに目次を付ける用�
 
 ```bash
 # 1ファイル
-python3 Tools/GenDocsToc/gen_toc.py docs/実装計画.md
+python3 Tools/GenDocsToc/gen_toc.py docs/技術仕様.md
 
 # 複数ファイル（glob 可）
 python3 Tools/GenDocsToc/gen_toc.py docs/*.md
