@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JPStellaVeil — ソフトフィルターは、撮ったあとで良い</title>
+<meta name="description" content="現像済みの 16bit TIFF に、星空用ソフトフィルターの滲みをあとがけする macOS アプリ。空だけに効かせて、メタデータは 1 つも落とさない。">
+<meta property="og:title" content="JPStellaVeil">
+<meta property="og:description" content="星空用ソフトフィルターの滲みを、現像済みの 16bit TIFF にあとがけする macOS アプリ">
+<meta property="og:image" content="https://junpeiwada.github.io/JPStellaVeil/screenshot.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #05070d;      /* 夜空の紺黒 */
+    --deep:  #0a0e1a;      /* セクションの奥行き */
+    --line:  #1a2138;      /* 罫線 */
+    --star:  #e8edf7;      /* 星白（本文） */
+    --dim:   #8a94ac;      /* 薄明（補助文） */
+    --glow:  #ffd9a0;      /* 輝星の暖色ハロー（アクセント） */
+    --cold:  #7fa8ff;      /* 冷たい星明かり（副アクセント） */
+    --latin: "Space Grotesk", "Helvetica Neue", sans-serif;
+    --ja: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--night);
+    color: var(--star);
+    font-family: var(--ja);
+    font-size: 16px;
+    line-height: 1.9;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(255, 217, 160, .25); }
+  a { color: var(--cold); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--glow); outline-offset: 3px; border-radius: 2px; }
+  img { max-width: 100%; display: block; }
+
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- 背景の星（固定・微細） ---------- */
+  .field {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(1200px 700px at 75% -10%, #101a33 0%, transparent 60%),
+      radial-gradient(900px 600px at 10% 110%, #0b1226 0%, transparent 55%),
+      var(--night);
+  }
+  .field i { position: absolute; border-radius: 50%; background: #cfd9ee; }
+
+  /* ---------- ヒーロー ---------- */
+  .hero { padding: 96px 0 56px; text-align: center; position: relative; }
+  .hero .icon {
+    width: 108px; height: 108px; margin: 0 auto 20px;
+    filter: drop-shadow(0 12px 36px rgba(127, 168, 255, .25));
+  }
+  .brand {
+    font-family: var(--latin);
+    font-weight: 300;
+    font-size: 15px;
+    letter-spacing: .42em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 26px;
+  }
+  h1 {
+    font-size: clamp(30px, 5.4vw, 52px);
+    font-weight: 700;
+    line-height: 1.45;
+    letter-spacing: .02em;
+    margin-bottom: 22px;
+  }
+  h1 .halo {
+    color: var(--glow);
+    text-shadow:
+      0 0 18px rgba(255, 217, 160, .55),
+      0 0 60px rgba(255, 217, 160, .30),
+      0 0 120px rgba(255, 190, 120, .20);
+  }
+  .lede {
+    max-width: 620px; margin: 0 auto 36px;
+    color: var(--dim); font-size: 16px;
+  }
+  .lede b { color: var(--star); font-weight: 500; }
+  .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 14px 30px; border-radius: 10px;
+    font-family: var(--ja); font-size: 15px; font-weight: 700;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn-primary {
+    background: linear-gradient(180deg, #ffe4bb, var(--glow));
+    color: #241a08;
+    box-shadow: 0 6px 28px rgba(255, 217, 160, .28);
+  }
+  .btn-primary:hover { box-shadow: 0 10px 36px rgba(255, 217, 160, .4); }
+  .btn-ghost { border: 1px solid var(--line); color: var(--star); }
+  .btn-ghost:hover { border-color: #2c3654; }
+  .req {
+    margin-top: 20px; color: var(--dim); font-size: 13px;
+    font-family: var(--latin); letter-spacing: .04em;
+  }
+  .req .v { color: var(--cold); }
+
+  /* ---------- セクション共通 ---------- */
+  section { padding: 88px 0; }
+  .eyebrow {
+    font-family: var(--latin); font-size: 12px; letter-spacing: .34em;
+    text-transform: uppercase; color: var(--glow); margin-bottom: 14px;
+  }
+  h2 { font-size: clamp(24px, 3.6vw, 34px); font-weight: 700; line-height: 1.5; margin-bottom: 14px; }
+  .sub { color: var(--dim); max-width: 640px; margin-bottom: 44px; }
+  .sub b { color: var(--star); font-weight: 500; }
+
+  /* ---------- 既定の4つ ---------- */
+  .defaults { border-top: 1px solid var(--line); background: linear-gradient(180deg, var(--deep), transparent 320px); }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .cell { background: var(--night); padding: 30px 28px; }
+  .cell h3 { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+  .cell h3 .k { color: var(--glow); }
+  .cell p { color: var(--dim); font-size: 14.5px; }
+  .cell .mono { font-family: var(--latin); font-size: 12px; letter-spacing: .1em; color: var(--cold); display: block; margin-bottom: 12px; }
+
+  /* ---------- スクリーンショット ---------- */
+  .shot-frame {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+  }
+  .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 40px; }
+  .pt h3 { font-size: 15.5px; font-weight: 700; margin-bottom: 6px; }
+  .pt h3 kbd {
+    font-family: var(--latin); font-size: 12px; color: var(--star);
+    border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 7px; margin-right: 6px;
+  }
+  .pt p { color: var(--dim); font-size: 13.5px; line-height: 1.8; }
+
+  /* ---------- インストール ---------- */
+  .steps { display: grid; gap: 0; border-left: 1px solid var(--line); }
+  .step { position: relative; padding: 0 0 34px 34px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before {
+    content: ""; position: absolute; left: -5px; top: 9px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--glow); box-shadow: 0 0 12px rgba(255, 217, 160, .8);
+  }
+  .step h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .step p { color: var(--dim); font-size: 14.5px; }
+  .step code {
+    font-family: var(--latin); font-size: 13px; color: var(--glow);
+    background: var(--deep); border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 8px;
+  }
+
+  /* ---------- 最後のCTA / フッター ---------- */
+  .last { text-align: center; border-top: 1px solid var(--line); }
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 34px 0 60px; text-align: center;
+    color: var(--dim); font-size: 13px;
+    font-family: var(--latin); letter-spacing: .05em;
+  }
+  footer a { color: var(--dim); }
+
+  /* ---------- モーション ---------- */
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .hero > * { animation: rise .7s ease both; }
+  .hero > *:nth-child(2) { animation-delay: .08s; }
+  .hero > *:nth-child(3) { animation-delay: .16s; }
+  .hero > *:nth-child(4) { animation-delay: .24s; }
+  .hero > *:nth-child(5) { animation-delay: .32s; }
+  .hero > *:nth-child(6) { animation-delay: .4s; }
+  @media (prefers-reduced-motion: reduce) {
+    .hero > * { animation: none; }
+    html { scroll-behavior: auto; }
+  }
+
+  @media (max-width: 720px) {
+    section { padding: 60px 0; }
+    .hero { padding: 64px 0 40px; }
+    .grid { grid-template-columns: 1fr; }
+    .points { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="field" id="field" aria-hidden="true"></div>
+
+<header class="hero wrap">
+  <img class="icon" src="icon.png" alt="JPStellaVeil のアイコン" width="108" height="108">
+  <p class="brand">JPStellaVeil</p>
+  <h1>ソフトフィルターは、<br>撮ったあとで<span class="halo">良い</span>。</h1>
+  <p class="lede">現像済みの <b>16bit TIFF</b> に、星の明るさに応じたグローをあとがけする macOS アプリ。<b>空だけに効かせて</b>、EXIF や MakerNote は 1 つも落としません。</p>
+  <div class="cta">
+    <a id="dl" class="btn btn-primary" href="https://github.com/Junpeiwada/JPStellaVeil/releases/latest">DMG をダウンロード</a>
+    <a class="btn btn-ghost" href="https://github.com/Junpeiwada/JPStellaVeil">GitHub で見る</a>
+  </div>
+  <p class="req">macOS 14+ · Apple notarized · Sparkle auto-update<span id="ver"></span></p>
+</header>
+
+<section class="defaults">
+  <div class="wrap">
+    <p class="eyebrow">Defaults, not options</p>
+    <h2>設定しなくても、この 4 つが既定。</h2>
+    <p class="sub">Photoshop でも同じことはできます。ただしこの 4 つを同時に満たすには手数が増え、検証も自前になります。JPStellaVeil はすべてを<b>既定の動作</b>にしました。</p>
+    <div class="grid">
+      <div class="cell">
+        <span class="mono">16-BIT PIPELINE</span>
+        <h3><span class="k">16bit のまま</span>処理する</h3>
+        <p>読み込みから書き出しまで一度も 8bit に落としません。トーンジャンプの心配なく、現像結果の階調をそのまま持ち越せます。</p>
+      </div>
+      <div class="cell">
+        <span class="mono">LINEAR SPACE</span>
+        <h3><span class="k">リニア空間</span>で滲ませる</h3>
+        <p>グローの合成はリニア空間で行います。光学フィルターと同じ振る舞いで、明るい星ほど大きく自然に滲みます。</p>
+      </div>
+      <div class="cell">
+        <span class="mono">SKY MASK</span>
+        <h3><span class="k">空だけ</span>に効かせる</h3>
+        <p>Photoshop の「空を選択」を借りて空マスクを生成。前景の街灯や建物はシャープなまま、星だけが滲みます。</p>
+      </div>
+      <div class="cell">
+        <span class="mono">METADATA INTACT</span>
+        <h3>メタデータを<span class="k">完全に保つ</span></h3>
+        <p>EXIF・MakerNote を 1 つも落とさず書き出し、ExifTool による検証に合格したものだけを保存します。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Layers &amp; Preview</p>
+    <h2>レイヤーで重ねて、その場で確かめる。</h2>
+    <p class="sub">「微細グロー」「標準グロー」「広いハロー」の 3 プリセットをレイヤーとして重ね、右のインスペクタで調整。プレビューは<b>即座に</b>更新されます。</p>
+    <div class="shot-frame">
+      <img src="screenshot.png" alt="JPStellaVeil のメインウィンドウ。天の川の写真に「広いハロー」レイヤーを適用し、右のインスペクタでグローの強度や半径を調整している" loading="lazy">
+    </div>
+    <div class="points">
+      <div class="pt">
+        <h3><kbd>Space</kbd>原画と見比べる</h3>
+        <p>押している間だけ原画表示。効き具合を指先で確認できます。</p>
+      </div>
+      <div class="pt">
+        <h3><kbd>⌥ + Drag</kbd>スプリット比較</h3>
+        <p>左が原画、右が処理結果。境界をドラッグして効き具合を見比べられます。</p>
+      </div>
+      <div class="pt">
+        <h3><kbd>Metal</kbd>フル解像度処理</h3>
+        <p>値を変えると自動でフル解像度処理。GPU で待ち時間を最小にします。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="defaults">
+  <div class="wrap">
+    <p class="eyebrow">Install</p>
+    <h2>インストールは 3 分で終わる。</h2>
+    <p class="sub">Apple の公証済みなので、警告なしに起動できます。</p>
+    <div class="steps">
+      <div class="step">
+        <h3>DMG をダウンロードして Applications へ</h3>
+        <p><a href="https://github.com/Junpeiwada/JPStellaVeil/releases/latest">最新リリース</a>の DMG を開き、JPStellaVeil をドラッグするだけです。</p>
+      </div>
+      <div class="step">
+        <h3>あとはアプリが自分で更新を確認</h3>
+        <p>Sparkle による自動更新を内蔵。新しいバージョンはアプリ内で通知されます。</p>
+      </div>
+      <div class="step">
+        <h3>（任意）ExifTool と Photoshop</h3>
+        <p>メタデータ検証には <code>brew install exiftool</code>、空マスクの生成には Adobe Photoshop を使います。<b>どちらも無くても</b>グローの適用と書き出しはできます。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="last">
+  <div class="wrap">
+    <h2>次の天の川は、<span style="color: var(--glow)">あとから</span>滲ませる。</h2>
+    <p class="sub" style="margin: 0 auto 32px;">フィルターの効き具合に、撮影地で悩むのはもう終わりです。</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/Junpeiwada/JPStellaVeil/releases/latest">DMG をダウンロード</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>© 2026 Junpei Wada · <a href="https://github.com/Junpeiwada/JPStellaVeil">GitHub</a> · macOS 14+</p>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* 疑似乱数（シード固定 = 原画側と適用側で同じ星配置にする） */
+  function rng(seed) {
+    return function () {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+  }
+
+  /* 背景の微細な星 */
+  var field = document.getElementById("field");
+  var r0 = rng(7);
+  var i, el;
+  for (i = 0; i < 90; i++) {
+    el = document.createElement("i");
+    var sz = r0() < 0.85 ? 1 : 2;
+    el.style.cssText = "left:" + (r0() * 100) + "%;top:" + (r0() * 100) + "%;" +
+      "width:" + sz + "px;height:" + sz + "px;opacity:" + (0.15 + r0() * 0.5);
+    field.appendChild(el);
+  }
+
+  /* 最新バージョンを表示（失敗しても releases/latest のまま） */
+  fetch("https://api.github.com/repos/Junpeiwada/JPStellaVeil/releases/latest")
+    .then(function (res) { return res.json(); })
+    .then(function (json) {
+      if (json && json.tag_name) {
+        document.getElementById("ver").innerHTML =
+          ' · <span class="v">' + json.tag_name + "</span>";
+      }
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>
