@@ -208,11 +208,14 @@ jobs:
           cp sparkle-feed/appcast.xml pages/appcast.xml
           cat pages/appcast.xml
 
-      - name: appcast を GitHub Pages へ publish
+      - name: ランディングページ（site/）を配信対象に含める
+        run: cp -R site/. pages/
+
+      - name: appcast とランディングページを GitHub Pages へ publish
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: ./pages
-          # 将来ランディングページ（site/）を足すときのために既存ファイルは残す。
+          # site/ 由来以外の既存ファイル（過去の appcast など）は残す。
           keep_files: true
