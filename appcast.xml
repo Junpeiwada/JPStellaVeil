@@ -3,12 +3,12 @@
     <channel>
         <title>JPStellaVeil</title>
         <item>
-            <title>1.0.1</title>
-            <pubDate>Wed, 26 Aug 2026 13:00:13 +0000</pubDate>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+            <title>1.0.2</title>
+            <pubDate>Thu, 27 Aug 2026 01:54:14 +0000</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/Junpeiwada/JPStellaVeil/releases/download/v1.0.1/JPStellaVeil-1.0.1.zip" length="3192986" type="application/octet-stream" sparkle:edSignature="5fXG5SOPHw3TBmvNhSsTu895+9U5lKSLMia7FiXGkaITn2du4LS7OhooWTzlknotUij4+wjmJny9PqanqbRMCg=="/>
+            <enclosure url="https://github.com/Junpeiwada/JPStellaVeil/releases/download/v1.0.2/JPStellaVeil-1.0.2.zip" length="4473418" type="application/octet-stream" sparkle:edSignature="FR9uZoQXlrIGVgEtLxoSvNcPzffYlbb+0wMpoi2duhaBtjLkr7Dy4C3UVHEIdFUdCPScnOeb1PVX+mbBngYmCQ=="/>
         </item>
     </channel>
 </rss>
