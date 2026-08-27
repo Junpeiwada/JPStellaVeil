@@ -62,11 +62,11 @@
     width: 128px; height: 128px; margin: 0 auto 20px;
   }
   .icon-wrap::before {           /* リムライト（輝星と同じ暖色を右上、冷たい青を左下） */
-    content: ""; position: absolute; inset: -30%;
+    content: ""; position: absolute; inset: -50%;
     background:
-      radial-gradient(closest-side at 58% 36%, rgba(255, 217, 160, .26), transparent 62%),
-      radial-gradient(closest-side at 42% 68%, rgba(127, 168, 255, .22), transparent 68%);
-    filter: blur(14px);
+      radial-gradient(closest-side at 50% 48%, rgba(170, 196, 255, .62), rgba(170, 196, 255, .22) 56%, transparent 76%),
+      radial-gradient(closest-side at 62% 32%, rgba(255, 217, 160, .48), transparent 54%);
+    filter: blur(18px);
     z-index: 0;
   }
   .icon-wrap img {
