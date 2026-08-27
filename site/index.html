@@ -110,69 +110,6 @@
   }
   .req .v { color: var(--cold); }
 
-  /* ---------- スプリット比較デモ ---------- */
-  .demo { padding: 40px 0 8px; }
-  .demo-frame {
-    position: relative; border: 1px solid var(--line); border-radius: 14px;
-    overflow: hidden; aspect-ratio: 16 / 7.5; background: #04060c;
-    touch-action: none;
-  }
-  .sky { position: absolute; inset: 0; }
-  .sky.glowed { clip-path: inset(0 0 0 var(--split, 50%)); }
-  .sky .s { position: absolute; border-radius: 50%; }
-  /* 主役星（滲み側だけ大きなハローとクロススパイク） */
-  .bright { position: absolute; }
-  .bright .core {
-    position: absolute; inset: 0; border-radius: 50%;
-    background: #fff;
-  }
-  .glowed .bright .core {
-    box-shadow:
-      0 0 10px 3px rgba(255, 240, 214, .95),
-      0 0 34px 14px rgba(255, 219, 166, .55),
-      0 0 90px 40px rgba(255, 200, 130, .22);
-  }
-  .glowed .bright::before, .glowed .bright::after {
-    content: ""; position: absolute; left: 50%; top: 50%;
-    transform: translate(-50%, -50%);
-    background: linear-gradient(90deg, transparent, rgba(255,240,214,.9), transparent);
-  }
-  .glowed .bright::before { width: 2000%; height: 1.5px; }
-  .glowed .bright::after  { width: 1.5px; height: 1400%;
-    background: linear-gradient(180deg, transparent, rgba(255,240,214,.9), transparent); }
-  /* 前景（空マスク＝両側とも滲まない） */
-  .ridge { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; pointer-events: none; }
-  .ridge svg { display: block; width: 100%; height: auto; }
-  /* 分割線とハンドル */
-  .divider {
-    position: absolute; top: 0; bottom: 0; width: 1px; z-index: 4;
-    left: var(--split, 50%); background: rgba(232, 237, 247, .55);
-    pointer-events: none;
-  }
-  .divider::after {
-    content: "◂ ▸"; position: absolute; top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 11px; letter-spacing: 2px; color: #10131c;
-    background: var(--star); border-radius: 999px; padding: 6px 12px;
-    white-space: nowrap; font-family: var(--latin);
-  }
-  .demo-frame input[type="range"] {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    opacity: 0; cursor: ew-resize; z-index: 5; margin: 0;
-  }
-  .tag-l, .tag-r {
-    position: absolute; top: 14px; z-index: 4; pointer-events: none;
-    font-family: var(--latin); font-size: 11px; letter-spacing: .18em;
-    color: var(--dim); background: rgba(5, 7, 13, .6);
-    padding: 4px 10px; border-radius: 6px; backdrop-filter: blur(4px);
-  }
-  .tag-l { left: 14px; }
-  .tag-r { right: 14px; color: var(--glow); }
-  .demo-note {
-    text-align: center; color: var(--dim); font-size: 13.5px; margin-top: 16px;
-  }
-  .demo-note b { color: var(--star); font-weight: 500; }
-
   /* ---------- セクション共通 ---------- */
   section { padding: 88px 0; }
   .eyebrow {
@@ -251,7 +188,6 @@
     .hero { padding: 64px 0 40px; }
     .grid { grid-template-columns: 1fr; }
     .points { grid-template-columns: 1fr; }
-    .demo-frame { aspect-ratio: 4 / 3; }
   }
 </style>
 </head>
@@ -270,24 +206,6 @@
   </div>
   <p class="req">macOS 14+ · Apple notarized · Sparkle auto-update<span id="ver"></span></p>
 </header>
-
-<div class="demo wrap">
-  <div class="demo-frame" id="demo">
-    <div class="sky" id="sky-sharp"></div>
-    <div class="sky glowed" id="sky-glow"></div>
-    <div class="ridge">
-      <svg viewBox="0 0 1200 150" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M0,150 L0,96 L90,70 L170,92 L260,48 L340,84 L430,60 L520,90 L640,34 L760,80 L850,58 L950,86 L1040,66 L1120,88 L1200,72 L1200,150 Z" fill="#030409"/>
-      </svg>
-    </div>
-    <span class="tag-l">原画</span>
-    <span class="tag-r">JPStellaVeil</span>
-    <div class="divider" aria-hidden="true"></div>
-    <input type="range" id="split" min="0" max="100" step="0.5" value="50"
-           aria-label="原画とソフトフィルター適用後の境界位置">
-  </div>
-  <p class="demo-note">ドラッグして見比べる — 星は滲み、<b>前景のシルエットは滲まない</b>。それが空マスクの働きです。</p>
-</div>
 
 <section class="defaults">
   <div class="wrap">
@@ -334,7 +252,7 @@
       </div>
       <div class="pt">
         <h3><kbd>⌥ + Drag</kbd>スプリット比較</h3>
-        <p>左が原画、右が処理結果。このページ上部のデモと同じ操作がアプリ内でできます。</p>
+        <p>左が原画、右が処理結果。境界をドラッグして効き具合を見比べられます。</p>
       </div>
       <div class="pt">
         <h3><kbd>Metal</kbd>フル解像度処理</h3>
@@ -403,44 +321,6 @@
       "width:" + sz + "px;height:" + sz + "px;opacity:" + (0.15 + r0() * 0.5);
     field.appendChild(el);
   }
-
-  /* スプリットデモの星空（同じ座標で 2 層作る） */
-  function buildSky(target, glowed) {
-    var r = rng(42);
-    var html = "";
-    var n;
-    for (n = 0; n < 160; n++) {
-      var x = r() * 100, y = r() * 78;   /* 下部は山なので空けておく */
-      var mag = r();                      /* 星の等級 */
-      var size = mag < 0.9 ? (mag < 0.6 ? 1 : 1.5) : 2.5;
-      var op = 0.35 + mag * 0.65;
-      var style = "left:" + x + "%;top:" + y + "%;width:" + size + "px;height:" + size + "px;";
-      if (glowed) {
-        var halo = 2 + mag * 9;
-        style += "background:#fff;opacity:" + op + ";" +
-          "box-shadow:0 0 " + halo + "px " + (halo / 3) + "px rgba(255,236,205," + (mag * 0.5) + ");";
-      } else {
-        style += "background:#dfe7f5;opacity:" + op + ";";
-      }
-      html += '<span class="s" style="' + style + '"></span>';
-    }
-    /* 主役の輝星 3 つ（アイコンと同じ、明るいほど大きく滲む） */
-    var brights = [[74, 22, 5], [30, 40, 3.4], [52, 62, 2.6]];
-    brights.forEach(function (b) {
-      html += '<span class="bright" style="left:' + b[0] + "%;top:" + b[1] + "%;width:" +
-        b[2] + "px;height:" + b[2] + 'px;"><span class="core"></span></span>';
-    });
-    target.innerHTML = html;
-  }
-  buildSky(document.getElementById("sky-sharp"), false);
-  buildSky(document.getElementById("sky-glow"), true);
-
-  /* スライダー（input[type=range] でキーボード操作も可） */
-  var demo = document.getElementById("demo");
-  var split = document.getElementById("split");
-  function apply() { demo.style.setProperty("--split", split.value + "%"); }
-  split.addEventListener("input", apply);
-  apply();
 
   /* 最新バージョンを表示（失敗しても releases/latest のまま） */
   fetch("https://api.github.com/repos/Junpeiwada/JPStellaVeil/releases/latest")
